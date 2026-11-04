@@ -1,25 +1,7 @@
-# OS files
-.DS_Store
-Thumbs.db
-
-# Node
 node_modules/
+dist/
 .env
 .env.*
-
-# Python
-__pycache__/
-*.pyc
-.venv/
-
-# Logs
+!.env.example
 *.log
-
-# Build outputs
-/dist/
-/build/
-/.next/
-
-# Editors
-.vscode/
-.idea/
+.DS_Store

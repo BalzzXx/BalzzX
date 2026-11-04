@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#101a39"/>
+      <stop offset=".52" stop-color="#4c4a83"/>
+      <stop offset="1" stop-color="#f19b86"/>
+    </linearGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d07c83"/>
+      <stop offset="1" stop-color="#182745"/>
+    </linearGradient>
+    <linearGradient id="front" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#28385f"/>
+      <stop offset="1" stop-color="#10192e"/>
+    </linearGradient>
+    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+  <rect width="1280" height="720" fill="url(#sky)"/>
+  <circle cx="954" cy="210" r="95" fill="#ffcba9" opacity=".28" filter="url(#glow)"/>
+  <circle cx="954" cy="210" r="61" fill="#ffe4c5"/>
+  <g fill="#fff3e8" opacity=".7">
+    <circle cx="126" cy="109" r="2"/><circle cx="250" cy="176" r="2"/>
+    <circle cx="374" cy="92" r="2"/><circle cx="518" cy="148" r="1.5"/>
+    <circle cx="683" cy="83" r="2"/><circle cx="1104" cy="97" r="2"/>
+    <circle cx="1165" cy="288" r="1.5"/><circle cx="803" cy="190" r="1.5"/>
+  </g>
+  <path d="M0 437 177 255l98 103 162-197 194 255 117-140 157 158 111-138 264 207v92H0Z" fill="#35436d"/>
+  <path d="m275 358 162-197 101 132-75-40-39 17-44-11-34 34-31-9Z" fill="#d2bdc7" opacity=".88"/>
+  <path d="m748 434 157-158 75 94-47-21-35 18-34-10-28 25-35-9Z" fill="#c6b7cd" opacity=".72"/>
+  <path d="M0 450q230-54 442 0t420 0q225-58 418 0v84H0Z" fill="#303c64"/>
+  <path d="M0 488q214-36 431 0t427 0q216-42 422 0v232H0Z" fill="url(#water)"/>
+  <path d="M880 488q75 13 145 0t137 0" fill="none" stroke="#ffd0ad" stroke-width="5" opacity=".56"/>
+  <path d="M929 517q93 13 187 0t156 0" fill="none" stroke="#ffd0ad" stroke-width="3" opacity=".35"/>
+  <path d="M0 579q160-45 314-2t313 0q174-53 340-3t313 0v146H0Z" fill="url(#front)"/>
+  <path d="M0 634q180-30 344 7t310-1q169-38 322 0t304 1v79H0Z" fill="#10182d" opacity=".78"/>
+  <g fill="#121a31">
+    <path d="m106 501 20-94 20 94h-13v41h-14v-41Z"/>
+    <path d="m151 514 17-78 18 78h-12v32h-12v-32Z"/>
+    <path d="m1112 504 21-105 22 105h-14v42h-15v-42Z"/>
+    <path d="m1161 514 17-81 19 81h-12v33h-13v-33Z"/>
+  </g>
+  <text x="74" y="594" fill="#fff5ed" font-family="Arial, sans-serif" font-size="24" letter-spacing="8" opacity=".78">WELCOME TO</text>
+  <text x="70" y="654" fill="#ffffff" font-family="Arial, sans-serif" font-size="54" font-weight="700" letter-spacing="3">BALZZX-MD</text>
+</svg>
