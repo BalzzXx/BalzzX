@@ -6,6 +6,69 @@ const videoKeys = new Set([
     "video", "videourl", "video_url", "videos", "video_src", "videosrc",
     "video_media", "videomedia", "mp4", "playable_url"
 ]);
+export const MAX_PINTEREST_VIDEO_SIZE = 50 * 1024 * 1024;
+
+function isPinterestVideoHost(url) {
+    return url.hostname === "pinimg.com" || url.hostname.endsWith(".pinimg.com");
+}
+
+export async function downloadPinterestVideo(value, fetchImpl = fetch) {
+    let url = new URL(value);
+    for (let redirects = 0; redirects <= 5; redirects++) {
+        if (url.protocol !== "https:" || !isPinterestVideoHost(url))
+            throw new Error("Pinterest video URL must use an HTTPS pinimg.com host");
+
+        const response = await fetchImpl(url, {
+            redirect: "manual",
+            signal: AbortSignal.timeout(30_000)
+        });
+        if (response.status >= 300 && response.status < 400) {
+            const location = response.headers.get("location");
+            if (!location)
+                throw new Error("Pinterest video redirect is missing its location");
+            url = new URL(location, url);
+            continue;
+        }
+        if (!response.ok)
+            throw new Error(`Pinterest video download failed with HTTP ${response.status}`);
+
+        const contentLength = Number(response.headers.get("content-length"));
+        if (Number.isFinite(contentLength) && contentLength > MAX_PINTEREST_VIDEO_SIZE)
+            throw new Error("Pinterest video exceeds Telegram's upload size limit");
+
+        if (!response.body)
+            throw new Error("Pinterest video response has no body");
+        const reader = response.body.getReader();
+        const chunks = [];
+        let size = 0;
+        try {
+            while (true) {
+                const { done, value: chunk } = await reader.read();
+                if (done)
+                    break;
+                size += chunk.byteLength;
+                if (size > MAX_PINTEREST_VIDEO_SIZE) {
+                    await reader.cancel();
+                    throw new Error("Pinterest video exceeds Telegram's upload size limit");
+                }
+                chunks.push(chunk);
+            }
+        }
+        finally {
+            reader.releaseLock();
+        }
+
+        const bytes = new Uint8Array(size);
+        let offset = 0;
+        for (const chunk of chunks) {
+            bytes.set(chunk, offset);
+            offset += chunk.byteLength;
+        }
+        return bytes;
+    }
+    throw new Error("Pinterest video redirected too many times");
+}
+
 function isMediaUrl(value, key, type) {
     if (typeof value !== "string")
         return false;

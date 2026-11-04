@@ -5,8 +5,10 @@ Bot Telegram multi-user dengan autentikasi identitas Telegram, tools praktis, ko
 ## Fitur
 
 - Pendaftaran otomatis saat pengguna mengirim `/start`; akun dikenali dari Telegram ID.
-- Menu visual dengan GIF animasi BalzzX-MD dan tombol inline; gunakan `/start` atau `/help` untuk membukanya.
+- Menu visual memakai media dari `MENU_MEDIA_URL` dengan tombol inline; gambar dan GIF dikirim langsung, video otomatis dikonversi ke GIF saat bot mulai.
 - Pencarian gambar Pinterest lewat `/pin`; pencarian video lewat `/pinvid`, maksimal 10 hasil per pencarian.
+- Gambar iPhone quoted lewat `/iqc teks` atau alias `/quoted`; format waktu dapat diatur dengan `/iqc teks | 12:40 | 10:15`.
+- Tingkatkan foto dengan `/hd` (NeoXR) atau upscale video secara lokal ke HD 1080; balas media dengan perintah tersebut.
 - Pencarian lagu SoundCloud lewat `/soundcloud <kata kunci>`, menampilkan hingga 5 hasil dan tautan resmi.
 - Balasan AI otomatis memakai NeoXR GPT-Pro untuk pesan teks di chat pribadi.
 - `/tourl` untuk mengunggah media yang di-reply ke Kappa dan menerima tautannya (maksimum 20 MB).
@@ -29,7 +31,7 @@ npm install
 cp .env.example .env
 ```
 
-Isi `BOT_TOKEN` di `.env` dengan token baru dari BotFather. `BOT_ADMIN_IDS` sudah menyiapkan ID admin yang diminta. Database otomatis dibuat di `./data/balzzx.sqlite`; ubah lokasinya lewat `DATABASE_PATH` jika diperlukan. Folder `data/` diabaikan oleh Git.
+Isi `BOT_TOKEN` di `.env` dengan token baru dari BotFather. `BOT_ADMIN_IDS` sudah menyiapkan ID admin yang diminta. Database otomatis dibuat di `./data/balzzx.sqlite`; ubah lokasinya lewat `DATABASE_PATH` jika diperlukan. Media menu diambil dari `MENU_MEDIA_URL` saat startup. Folder `data/` diabaikan oleh Git.
 
 ```bash
 npm run dev
@@ -47,7 +49,9 @@ Pengguna dan status dari database PostgreSQL lama tidak diimpor otomatis; SQLite
 
 ## Perintah
 
-Pengguna: `/start`, `/help`, `/profile`, `/id`, `/ping`, `/time`, `/calc`, `/random`, `/pin`, `/pinvid`, `/soundcloud`, `/tourl`, `/quote`, `/subscribe`, `/unsubscribe`.
+Pengguna: `/start`, `/help`, `/profile`, `/id`, `/ping`, `/time`, `/calc`, `/random`, `/pin`, `/pinvid`, `/iqc`, `/quoted`, `/hd`, `/soundcloud`, `/tourl`, `/quote`, `/subscribe`, `/unsubscribe`.
+
+Pemrosesan `/hd` untuk foto mengunggah foto ke Kappa agar NeoXR dapat mengaksesnya; video diproses lokal dengan FFmpeg. Batas ukuran media masukan 20 MB dan hasil video 45 MB. Video di-upscale secara spasial, sehingga resolusi naik tetapi detail yang tidak ada pada sumber tidak dapat dipulihkan.
 
 `/tourl` mengunggah file ke layanan pihak ketiga Kappa. Gunakan hanya untuk file yang berhak Anda bagikan; jangan unggah materi privat atau sensitif.
 

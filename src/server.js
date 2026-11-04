@@ -1,6 +1,8 @@
+import { dirname } from "node:path";
 import { createBot } from "./bot.js";
 import { loadConfig } from "./config.js";
 import { createDatabase, initializeDatabase } from "./db.js";
+import { prepareMenuMedia } from "./menu-media.js";
 
 const config = loadConfig();
 const database = createDatabase(config.databasePath);
@@ -8,13 +10,17 @@ let store;
 
 try {
     store = initializeDatabase(database);
-    const bot = createBot(config, store);
+    const menuMedia = await prepareMenuMedia(config.menuMediaUrl, dirname(config.databasePath));
+    const bot = createBot(config, store, menuMedia);
     try {
         await bot.api.setMyCommands([
             { command: "start", description: "Buka menu bot" },
             { command: "help", description: "Buka bantuan bot" },
             { command: "pin", description: "Cari gambar Pinterest" },
             { command: "pinvid", description: "Cari video Pinterest" },
+            { command: "iqc", description: "Buat iPhone quoted" },
+            { command: "quoted", description: "Buat iPhone quoted" },
+            { command: "hd", description: "Tingkatkan resolusi foto/video" },
             { command: "soundcloud", description: "Cari lagu di SoundCloud" },
             { command: "tourl", description: "Ubah media reply menjadi tautan" },
             { command: "profile", description: "Lihat profil Telegram" },

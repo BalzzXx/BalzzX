@@ -2,7 +2,9 @@ import { Bot, GrammyError, InlineKeyboard, InputFile } from "grammy";
 import { resolve } from "node:path";
 import { calculate, formatJakartaTime, formatRuntime, randomInteger } from "./features.js";
 import { buildNeoXrUrl, extractNeoXrAnswer } from "./neoxr.js";
-import { buildPinterestUrl, extractPinterestMedia } from "./pinterest.js";
+import { buildPinterestUrl, downloadPinterestVideo, extractPinterestMedia } from "./pinterest.js";
+import { buildIqcUrl, downloadIqcImage, extractIqcImage } from "./iqc.js";
+import { buildImageUpscaleUrl, convertVideoToHd, downloadUpscaledImage, extractUpscaledImageUrl } from "./hd.js";
 import { buildSoundCloudSearchUrl, extractSoundCloudTracks, formatSoundCloudTrack } from "./soundcloud.js";
 import { extractKappaLink, KAPPA_UPLOAD_URL, MAX_TELEGRAM_FILE_SIZE, safeFileName } from "./tourl.js";
 function getSender(ctx) {
@@ -72,6 +74,8 @@ function menuCaption(page, name, subscribed, status) {
             "/calc 12 * 3 — kalkulator",
             "/pinterest kucing (alias /pin) — cari gambar",
             "/pinvid kucing (alias /pv) — cari video",
+            "/iqc teks — buat iPhone quoted (alias /quoted)",
+            "/hd — balas foto/video untuk meningkatkan resolusi",
             "/soundcloud du ka — cari lagu di SoundCloud",
             "/tourl — reply media untuk membuat tautan"
         ].join("\n");
@@ -85,13 +89,12 @@ function menuCaption(page, name, subscribed, status) {
         return "⚙️ ADMIN PANEL\n\nAkses admin terverifikasi untuk akun ini.";
     return "🧮 KALKULATOR\n\nKirim contoh perintah berikut, ganti angka dan operator sesuai kebutuhan:\n/calc 12 * 3";
 }
-export function createBot(config, store) {
+export function createBot(config, store, menuMedia) {
     const bot = new Bot(config.token);
     const startedAt = Date.now();
     const pendingBroadcasts = new Map();
     const configuredCommandChats = new Set();
     const aiInFlight = new Set();
-    const menuAnimationPath = resolve(process.cwd(), "assets/balzzx-menu.gif");
     async function getBotStatus() {
         const before = Date.now();
         try {
@@ -113,10 +116,15 @@ export function createBot(config, store) {
         const user = getSender(ctx);
         const subscribed = store.isSubscribed(user.id);
         const status = await getBotStatus();
-        await ctx.replyWithAnimation(new InputFile(menuAnimationPath), {
+        const options = {
             caption: menuCaption("home", user.first_name, subscribed, status),
             reply_markup: menuKeyboard("home", config.adminIds.has(String(user.id)), subscribed)
-        });
+        };
+        const media = new InputFile(menuMedia.path);
+        if (menuMedia.type === "photo")
+            await ctx.replyWithPhoto(media, options);
+        else
+            await ctx.replyWithAnimation(media, options);
     }
     async function saveUser(from) {
         return store.saveUser(from);
@@ -140,6 +148,9 @@ export function createBot(config, store) {
                     { command: "help", description: "Buka bantuan bot" },
                     { command: "pin", description: "Cari gambar Pinterest" },
                     { command: "pinvid", description: "Cari video Pinterest" },
+                    { command: "iqc", description: "Buat iPhone quoted" },
+                    { command: "quoted", description: "Buat iPhone quoted" },
+                    { command: "hd", description: "Tingkatkan resolusi foto/video" },
                     { command: "tourl", description: "Ubah media reply menjadi tautan" },
                     { command: "profile", description: "Lihat profil Telegram" },
                     { command: "id", description: "Lihat ID Telegram" },
@@ -343,11 +354,12 @@ export function createBot(config, store) {
                 })));
             }
             else {
-                await ctx.api.sendMediaGroup(chatId, media.map((item, index) => ({
-                    type: "video",
-                    media: item.url,
-                    ...(caption(item, index) ? { caption: caption(item, index) } : {})
-                })));
+                for (const [index, item] of media.entries()) {
+                    const video = await downloadPinterestVideo(item.url);
+                    await ctx.api.sendVideo(chatId, new InputFile(video, "pinterest-video.mp4"), {
+                        ...(caption(item, index) ? { caption: caption(item, index) } : {})
+                    });
+                }
             }
         }
         catch (error) {
@@ -357,6 +369,132 @@ export function createBot(config, store) {
     }
     bot.command("pin", (ctx) => searchPinterest(ctx, ctx.match, "image"));
     bot.command("pinvid", (ctx) => searchPinterest(ctx, ctx.match, "video"));
+    async function createIqc(ctx) {
+        const parts = ctx.match.split("|").map((part) => part.trim());
+        const text = parts[0] ?? "";
+        const time = parts[1] || "12:40";
+        const chatTime = parts[2] || "10:15";
+        const validTime = /^(?:[01]?\d|2[0-3]):[0-5]\d$/;
+        if (!text || parts.length > 3 || !validTime.test(time) || !validTime.test(chatTime)) {
+            await ctx.reply("Format: /iqc teks | waktu | waktu_chat\nContoh: /iqc ayo scroll fesnuk 😜 | 12:40 | 10:15\nAlias: /quoted");
+            return;
+        }
+        if (text.length > 500) {
+            await ctx.reply("Teks terlalu panjang (maksimal 500 karakter).");
+            return;
+        }
+        if (!config.aiApiKey) {
+            await ctx.reply("NeoXR belum dikonfigurasi. Admin perlu mengisi NEOXR_API_KEY di .env.");
+            return;
+        }
+        await ctx.replyWithChatAction("upload_photo");
+        try {
+            const response = await fetch(buildIqcUrl(config.iqcApiUrl, config.aiApiKey, text, time, chatTime), {
+                signal: AbortSignal.timeout(30_000)
+            });
+            if (!response.ok) {
+                console.error(`NeoXR IQC request failed with HTTP ${response.status}`);
+                await ctx.reply("Pembuatan IQC sedang bermasalah. Coba lagi nanti.");
+                return;
+            }
+            const imageSource = extractIqcImage(await response.json());
+            if (!imageSource) {
+                await ctx.reply("NeoXR tidak mengembalikan gambar IQC. Coba lagi nanti.");
+                return;
+            }
+            const image = await downloadIqcImage(imageSource.url, imageSource.mime);
+            await ctx.replyWithPhoto(new InputFile(image.bytes, `iqc.${image.extension}`));
+        }
+        catch (error) {
+            console.error("NeoXR IQC generation failed:", error);
+            await ctx.reply("Tidak dapat membuat gambar IQC sekarang. Coba lagi nanti.");
+        }
+    }
+    bot.command("iqc", createIqc);
+    bot.command("quoted", createIqc);
+    bot.command("hd", async (ctx) => {
+        const source = ctx.msg.reply_to_message;
+        if (!source) {
+            await ctx.reply("Balas foto atau video dengan /hd untuk meningkatkan resolusinya.\nFoto diunggah ke Kappa lalu diproses NeoXR; video di-upscale lokal ke HD 1080.");
+            return;
+        }
+        const photo = source.photo?.at(-1);
+        const video = source.video ?? source.animation;
+        const media = photo
+            ? { fileId: photo.file_id, size: photo.file_size, type: "photo" }
+            : video
+                ? { fileId: video.file_id, size: video.file_size, type: "video" }
+                : undefined;
+        if (!media) {
+            await ctx.reply("Balas foto atau video dengan /hd. Tipe media ini belum didukung.");
+            return;
+        }
+        if (media.size !== undefined && media.size > MAX_TELEGRAM_FILE_SIZE) {
+            await ctx.reply("Media melebihi batas ukuran 20 MB.");
+            return;
+        }
+        if (media.type === "photo" && !config.aiApiKey) {
+            await ctx.reply("NeoXR belum dikonfigurasi. Admin perlu mengisi NEOXR_API_KEY di .env.");
+            return;
+        }
+        await ctx.replyWithChatAction(media.type === "photo" ? "upload_document" : "upload_video");
+        try {
+            const telegramFile = await ctx.api.getFile(media.fileId);
+            if (!telegramFile.file_path) {
+                await ctx.reply("Telegram tidak menyediakan file untuk diunduh.");
+                return;
+            }
+            const telegramUrl = `https://api.telegram.org/file/bot${config.token}/` +
+                telegramFile.file_path.split("/").map(encodeURIComponent).join("/");
+            const download = await fetch(telegramUrl, { signal: AbortSignal.timeout(30_000) });
+            if (!download.ok)
+                throw new Error(`Telegram file download failed with HTTP ${download.status}`);
+            const contentLength = Number(download.headers.get("content-length"));
+            if (Number.isFinite(contentLength) && contentLength > MAX_TELEGRAM_FILE_SIZE)
+                throw new Error("Media exceeds Telegram's 20 MB download limit");
+            const bytes = new Uint8Array(await download.arrayBuffer());
+            if (bytes.byteLength === 0 || bytes.byteLength > MAX_TELEGRAM_FILE_SIZE)
+                throw new Error("Media is empty or exceeds Telegram's 20 MB download limit");
+
+            if (media.type === "photo") {
+                const form = new FormData();
+                form.append("file", new Blob([bytes], { type: "image/jpeg" }), "photo.jpg");
+                const upload = await fetch(KAPPA_UPLOAD_URL, {
+                    method: "POST",
+                    body: form,
+                    signal: AbortSignal.timeout(60_000)
+                });
+                if (!upload.ok)
+                    throw new Error(`Kappa upload failed with HTTP ${upload.status}`);
+                const sourceUrl = extractKappaLink(await upload.json());
+                if (!sourceUrl)
+                    throw new Error("Kappa returned an invalid or unrecognized upload link");
+                const response = await fetch(buildImageUpscaleUrl(config.upscaleApiUrl, config.aiApiKey, sourceUrl), {
+                    signal: AbortSignal.timeout(60_000)
+                });
+                if (!response.ok)
+                    throw new Error(`NeoXR upscale request failed with HTTP ${response.status}`);
+                const imageUrl = extractUpscaledImageUrl(await response.json());
+                if (!imageUrl)
+                    throw new Error("NeoXR did not return a valid upscaled image link");
+                const image = await downloadUpscaledImage(imageUrl);
+                await ctx.replyWithDocument(new InputFile(image.bytes, `foto-hd.${image.extension}`), {
+                    caption: "✅ Foto ditingkatkan oleh NeoXR."
+                });
+                return;
+            }
+
+            const hdVideo = await convertVideoToHd(bytes);
+            await ctx.replyWithVideo(new InputFile(hdVideo, "video-hd.mp4"), {
+                caption: "✅ Video di-upscale lokal ke HD 1080.",
+                supports_streaming: true
+            });
+        }
+        catch (error) {
+            console.error("HD media processing failed:", error instanceof Error ? error.name : "Unknown error");
+            await ctx.reply("Tidak dapat memproses media. Pastikan ukuran maksimal 20 MB dan coba lagi.");
+        }
+    });
     bot.command("soundcloud", async (ctx) => {
         const query = ctx.match.trim();
         if (!query) {
