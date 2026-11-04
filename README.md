@@ -7,6 +7,7 @@ Bot Telegram multi-user dengan autentikasi identitas Telegram, tools praktis, AI
 - Pendaftaran otomatis saat pengguna mengirim `/start`; akun dikenali dari Telegram ID.
 - Menu visual dengan tombol inline dan ilustrasi landscape orisinal; gunakan `/start` atau `/help` untuk membukanya.
 - Pencarian gambar Pinterest lewat `/pinterest` atau `/pin`; pencarian video lewat `/pinvid` atau `/pv`, maksimal 10 hasil per pencarian.
+- Katalog API NeoXR resmi melalui `/apis`; jalankan endpoint aktif yang tercantum di katalog dengan `/neoxr`.
 - `/tourl` untuk mengunggah media yang di-reply ke Kappa dan menerima tautannya (maksimum 20 MB).
 - Profil, ID, ping, waktu Jakarta, kalkulator aman, generator angka acak, dan kutipan.
 - `/subscribe` dan `/unsubscribe` untuk persetujuan menerima atau berhenti dari broadcast.
@@ -40,11 +41,13 @@ Atau untuk mode production, jalankan langsung dengan Node.js:
 npm start
 ```
 
-Source bot menggunakan JavaScript ESM dan Node.js tanpa proses build. Untuk development dengan restart otomatis gunakan `npm run dev`. Bot menggunakan long polling; proses harus tetap berjalan agar dapat menerima update. Fitur `/ai` menggunakan endpoint NeoXR `gpt-pro`, dan pencarian Pinterest memakai `pinterest-v2`. Atur `NEOXR_API_KEY` di `.env`; endpoint dapat diubah lewat `NEOXR_API_URL` dan `NEOXR_PINTEREST_URL`.
+Source bot menggunakan JavaScript ESM dan Node.js tanpa proses build. Untuk development dengan restart otomatis gunakan `npm run dev`. Bot menggunakan long polling; proses harus tetap berjalan agar dapat menerima update. Fitur `/ai` menggunakan endpoint NeoXR `gpt-pro`, pencarian Pinterest memakai `pinterest-v2`, dan `/apis` mengambil daftar endpoint dari katalog NeoXR. `/neoxr` hanya menjalankan endpoint aktif yang tercatat di katalog, dengan parameter yang divalidasi terhadap dokumentasinya. Atur `NEOXR_API_KEY` di `.env`; endpoint AI dan Pinterest dapat diubah lewat `NEOXR_API_URL` dan `NEOXR_PINTEREST_URL`.
 
 ## Perintah
 
-Pengguna: `/start`, `/help`, `/profile`, `/id`, `/ping`, `/time`, `/calc`, `/random`, `/pinterest` (`/pin`), `/pinvid` (`/pv`), `/tourl`, `/quote`, `/subscribe`, `/unsubscribe`, `/ai`, `/resetai`.
+Pengguna: `/start`, `/help`, `/profile`, `/id`, `/ping`, `/time`, `/calc`, `/random`, `/pinterest` (`/pin`), `/pinvid` (`/pv`), `/tourl`, `/quote`, `/subscribe`, `/unsubscribe`, `/ai`, `/resetai`, `/apis [kata kunci]`, dan `/neoxr <endpoint> [parameter=value]`.
+
+Contoh NeoXR: `/apis searching`, `/neoxr cuaca subdistrict=batang`, `/neoxr google q="node.js"`. Daftar endpoint dapat berubah mengikuti dokumentasi NeoXR; endpoint premium tetap memerlukan paket/kuota yang sesuai dengan akun API.
 
 `/tourl` mengunggah file ke layanan pihak ketiga Kappa. Gunakan hanya untuk file yang berhak Anda bagikan; jangan unggah materi privat atau sensitif.
 

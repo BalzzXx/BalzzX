@@ -2,6 +2,13 @@ import { Bot, GrammyError, InlineKeyboard, InputFile } from "grammy";
 import { resolve } from "node:path";
 import { calculate, formatJakartaTime, formatRuntime, randomInteger } from "./features.js";
 import { buildNeoXrUrl, extractNeoXrAnswer } from "./neoxr.js";
+import {
+    buildNeoXrEndpointUrl,
+    formatNeoXrPayload,
+    parseNeoXrArguments,
+    parseNeoXrCatalog,
+    resolveNeoXrEndpoint
+} from "./neoxr-catalog.js";
 import { buildPinterestUrl, extractPinterestMedia } from "./pinterest.js";
 import { extractKappaLink, KAPPA_UPLOAD_URL, MAX_TELEGRAM_FILE_SIZE, safeFileName } from "./tourl.js";
 function getSender(ctx) {
@@ -69,7 +76,14 @@ function menuCaption(page, name, subscribed, status) {
             `│ Ping    : ${status?.ping ?? "memuat..."}`,
             "╰────────────────────────",
             "",
-            "🧰 PERINTAH",
+            "🌐 NEOXR API",
+            "/apis — daftar kategori dan endpoint",
+            "/apis nama — cari API di katalog resmi",
+            '/neoxr <endpoint> key="nilai" — jalankan API',
+            '/neoxr cuaca subdistrict="batang"',
+            '/neoxr gpt-pro q="halo"',
+            "",
+            "🧰 PERINTAH LAIN",
             "/ping — cek bot",
             "/time — waktu Jakarta",
             "/random 1 100 — angka acak",
@@ -95,7 +109,31 @@ export function createBot(config, pool) {
     const startedAt = Date.now();
     const pendingBroadcasts = new Map();
     const aiHistory = new Map();
+    let apiCatalog;
+    let apiCatalogFetchedAt = 0;
+    let apiCatalogRequest;
     const landscapePath = resolve(process.cwd(), "assets/balzzx-landscape.png");
+    async function getNeoXrCatalog() {
+        if (apiCatalog && Date.now() - apiCatalogFetchedAt < 60 * 60 * 1000)
+            return apiCatalog;
+        if (!apiCatalogRequest) {
+            apiCatalogRequest = (async () => {
+                const catalogUrl = new URL("/data/collections", new URL(config.aiApiUrl).origin);
+                const response = await fetch(catalogUrl, { signal: AbortSignal.timeout(20_000) });
+                if (!response.ok)
+                    throw new Error(`NeoXR catalog returned HTTP ${response.status}`);
+                const catalog = parseNeoXrCatalog(await response.json());
+                if (catalog.length === 0)
+                    throw new Error("NeoXR catalog did not contain usable endpoints");
+                apiCatalog = catalog;
+                apiCatalogFetchedAt = Date.now();
+                return catalog;
+            })().finally(() => {
+                apiCatalogRequest = undefined;
+            });
+        }
+        return apiCatalogRequest;
+    }
     async function getBotStatus() {
         const before = Date.now();
         try {
@@ -260,6 +298,107 @@ export function createBot(config, pool) {
     bot.command("id", (ctx) => ctx.reply(`Telegram ID: ${getSender(ctx).id}`));
     bot.command("ping", (ctx) => ctx.reply("🏓 Pong! Bot aktif."));
     bot.command("time", (ctx) => ctx.reply(`🕒 ${formatJakartaTime()}`));
+    bot.command("apis", async (ctx) => {
+        const query = ctx.match.trim().toLowerCase();
+        try {
+            const catalog = await getNeoXrCatalog();
+            if (!query) {
+                const categories = new Map();
+                for (const endpoint of catalog)
+                    categories.set(endpoint.category, (categories.get(endpoint.category) ?? 0) + 1);
+                const list = [...categories.entries()]
+                    .sort(([first], [second]) => first.localeCompare(second))
+                    .map(([category, count]) => `• ${category} (${count})`);
+                await ctx.reply(`📚 Katalog NeoXR (${catalog.length} endpoint aktif)\n\n${list.join("\n")}\n\nCari: /apis <nama atau kategori>`);
+                return;
+            }
+            const results = catalog.filter((endpoint) => endpoint.name.toLowerCase().includes(query) ||
+                endpoint.category.toLowerCase().includes(query) ||
+                endpoint.id.includes(query) ||
+                endpoint.path.toLowerCase().includes(query)).slice(0, 18);
+            if (results.length === 0) {
+                await ctx.reply("Tidak ada endpoint yang cocok. Gunakan /apis untuk melihat kategori.");
+                return;
+            }
+            const lines = results.map((endpoint) => {
+                const usage = endpoint.required.length === 1
+                    ? `<${endpoint.required[0]}>`
+                    : endpoint.required.map((key) => `${key}=<nilai>`).join(" ");
+                const plan = endpoint.premium ? " · Premium" : "";
+                return `• ${endpoint.name} [${endpoint.category}${plan}]\n  /neoxr ${endpoint.id}${usage ? ` ${usage}` : ""}`;
+            });
+            await ctx.reply(`🔎 Hasil katalog NeoXR (${results.length} ditampilkan)\n\n${lines.join("\n")}`);
+        }
+        catch (error) {
+            console.error("NeoXR catalog request failed:", error instanceof Error ? error.message : "Unknown error");
+            await ctx.reply("Tidak dapat memuat katalog NeoXR sekarang. Coba lagi nanti.");
+        }
+    });
+    bot.command("neoxr", async (ctx) => {
+        const input = ctx.match.trim();
+        const separator = input.search(/\s/);
+        const id = separator === -1 ? input : input.slice(0, separator);
+        const rawArguments = separator === -1 ? "" : input.slice(separator + 1);
+        if (!id) {
+            await ctx.reply("Format: /neoxr <endpoint> key=value\nCari endpoint dengan /apis atau /apis <nama>.");
+            return;
+        }
+        if (!config.aiApiKey) {
+            await ctx.reply("NEOXR_API_KEY belum dikonfigurasi di .env.");
+            return;
+        }
+        try {
+            const catalog = await getNeoXrCatalog();
+            const endpoint = resolveNeoXrEndpoint(catalog, id);
+            if (!endpoint) {
+                await ctx.reply(`Endpoint "${id}" tidak ditemukan atau tidak aktif. Cari dengan /apis ${id}.`);
+                return;
+            }
+            let parameters;
+            try {
+                parameters = parseNeoXrArguments(endpoint, rawArguments);
+            }
+            catch (error) {
+                await ctx.reply(`${error instanceof Error ? error.message : "Parameter tidak valid"}\n\nContoh: /neoxr ${endpoint.id} ${endpoint.required.map((key) => `${key}=<nilai>`).join(" ") || "(tanpa parameter)"}`);
+                return;
+            }
+            await ctx.replyWithChatAction("typing");
+            const url = buildNeoXrEndpointUrl(config.aiApiUrl, config.aiApiKey, endpoint, parameters);
+            const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+            if (!response.ok) {
+                console.error(`NeoXR endpoint ${endpoint.path} returned HTTP ${response.status}`);
+                await ctx.reply(`NeoXR mengembalikan HTTP ${response.status}. Periksa parameter, status endpoint, dan kuota API.`);
+                return;
+            }
+            const contentLength = Number(response.headers.get("content-length"));
+            if (Number.isFinite(contentLength) && contentLength > 1_000_000) {
+                await ctx.reply("Respons NeoXR terlalu besar untuk ditampilkan.");
+                return;
+            }
+            const text = await response.text();
+            if (text.length > 1_000_000) {
+                await ctx.reply("Respons NeoXR terlalu besar untuk ditampilkan.");
+                return;
+            }
+            let payload;
+            try {
+                payload = JSON.parse(text);
+            }
+            catch {
+                payload = text;
+            }
+            const fullOutput = formatNeoXrPayload(payload);
+            const output = fullOutput.length > 11_400
+                ? `${fullOutput.slice(0, 11_400)}\n\n[Respons dipotong agar tidak terlalu panjang.]`
+                : fullOutput;
+            for (let offset = 0; offset < output.length; offset += 3800)
+                await ctx.reply(output.slice(offset, offset + 3800));
+        }
+        catch (error) {
+            console.error("NeoXR documented endpoint request failed:", error instanceof Error ? error.name : "Unknown error");
+            await ctx.reply("Tidak dapat menjalankan endpoint NeoXR sekarang. Coba lagi nanti.");
+        }
+    });
     bot.command("calc", async (ctx) => {
         const result = calculate(ctx.match);
         if (result === undefined) {
