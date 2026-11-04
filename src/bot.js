@@ -2,14 +2,8 @@ import { Bot, GrammyError, InlineKeyboard, InputFile } from "grammy";
 import { resolve } from "node:path";
 import { calculate, formatJakartaTime, formatRuntime, randomInteger } from "./features.js";
 import { buildNeoXrUrl, extractNeoXrAnswer } from "./neoxr.js";
-import {
-    buildNeoXrEndpointUrl,
-    formatNeoXrPayload,
-    parseNeoXrArguments,
-    parseNeoXrCatalog,
-    resolveNeoXrEndpoint
-} from "./neoxr-catalog.js";
 import { buildPinterestUrl, extractPinterestMedia } from "./pinterest.js";
+import { buildSoundCloudSearchUrl, extractSoundCloudTracks, formatSoundCloudTrack } from "./soundcloud.js";
 import { extractKappaLink, KAPPA_UPLOAD_URL, MAX_TELEGRAM_FILE_SIZE, safeFileName } from "./tourl.js";
 function getSender(ctx) {
     if (!ctx.from)
@@ -21,7 +15,7 @@ function menuKeyboard(page, isAdmin, subscribed = false) {
     if (page === "home") {
         keyboard
             .text("🛠️ Tools", "menu:tools").text("👤 Akun", "menu:account").row()
-            .text("🤖 AI", "menu:ai").text("📣 Updates", "menu:updates");
+            .text("📣 Updates", "menu:updates");
         if (isAdmin)
             keyboard.row().text("⚙️ Admin", "menu:admin");
         return keyboard;
@@ -32,11 +26,6 @@ function menuKeyboard(page, isAdmin, subscribed = false) {
     if (page === "account") {
         return keyboard
             .text("👤 Profil saya", "action:profile").text("🪪 ID saya", "action:id").row()
-            .text("⬅️ Menu utama", "menu:home");
-    }
-    if (page === "ai") {
-        return keyboard
-            .text("✨ Cara pakai AI", "action:ai-help").text("🧹 Reset konteks", "action:ai-reset").row()
             .text("⬅️ Menu utama", "menu:home");
     }
     if (page === "updates") {
@@ -76,13 +65,6 @@ function menuCaption(page, name, subscribed, status) {
             `│ Ping    : ${status?.ping ?? "memuat..."}`,
             "╰────────────────────────",
             "",
-            "🌐 NEOXR API",
-            "/apis — daftar kategori dan endpoint",
-            "/apis nama — cari API di katalog resmi",
-            '/neoxr <endpoint> key="nilai" — jalankan API',
-            '/neoxr cuaca subdistrict="batang"',
-            '/neoxr gpt-pro q="halo"',
-            "",
             "🧰 PERINTAH LAIN",
             "/ping — cek bot",
             "/time — waktu Jakarta",
@@ -90,13 +72,12 @@ function menuCaption(page, name, subscribed, status) {
             "/calc 12 * 3 — kalkulator",
             "/pinterest kucing (alias /pin) — cari gambar",
             "/pinvid kucing (alias /pv) — cari video",
+            "/soundcloud du ka — cari lagu di SoundCloud",
             "/tourl — reply media untuk membuat tautan"
         ].join("\n");
     }
     if (page === "account")
         return "👤 AKUN\n\nInfo akun Telegram kamu.";
-    if (page === "ai")
-        return "🤖 AI ASSISTANT\n\nTanya AI dengan mengirim:\n/ai pertanyaan kamu\n\nAI tersedia jika layanan NeoXR dikonfigurasi admin.";
     if (page === "updates") {
         return `📣 PENGUMUMAN\n\nStatus: ${subscribed ? "✅ berlangganan" : "tidak berlangganan"}\n\nLangganan bersifat opsional dan bisa dihentikan kapan saja.`;
     }
@@ -104,36 +85,13 @@ function menuCaption(page, name, subscribed, status) {
         return "⚙️ ADMIN PANEL\n\nAkses admin terverifikasi untuk akun ini.";
     return "🧮 KALKULATOR\n\nKirim contoh perintah berikut, ganti angka dan operator sesuai kebutuhan:\n/calc 12 * 3";
 }
-export function createBot(config, pool) {
+export function createBot(config, store) {
     const bot = new Bot(config.token);
     const startedAt = Date.now();
     const pendingBroadcasts = new Map();
-    const aiHistory = new Map();
-    let apiCatalog;
-    let apiCatalogFetchedAt = 0;
-    let apiCatalogRequest;
-    const landscapePath = resolve(process.cwd(), "assets/balzzx-landscape.png");
-    async function getNeoXrCatalog() {
-        if (apiCatalog && Date.now() - apiCatalogFetchedAt < 60 * 60 * 1000)
-            return apiCatalog;
-        if (!apiCatalogRequest) {
-            apiCatalogRequest = (async () => {
-                const catalogUrl = new URL("/data/collections", new URL(config.aiApiUrl).origin);
-                const response = await fetch(catalogUrl, { signal: AbortSignal.timeout(20_000) });
-                if (!response.ok)
-                    throw new Error(`NeoXR catalog returned HTTP ${response.status}`);
-                const catalog = parseNeoXrCatalog(await response.json());
-                if (catalog.length === 0)
-                    throw new Error("NeoXR catalog did not contain usable endpoints");
-                apiCatalog = catalog;
-                apiCatalogFetchedAt = Date.now();
-                return catalog;
-            })().finally(() => {
-                apiCatalogRequest = undefined;
-            });
-        }
-        return apiCatalogRequest;
-    }
+    const configuredCommandChats = new Set();
+    const aiInFlight = new Set();
+    const menuAnimationPath = resolve(process.cwd(), "assets/balzzx-menu.gif");
     async function getBotStatus() {
         const before = Date.now();
         try {
@@ -153,25 +111,15 @@ export function createBot(config, pool) {
     }
     async function sendMainMenu(ctx) {
         const user = getSender(ctx);
-        const subscription = await pool.query("SELECT subscribed FROM telegram_users WHERE telegram_id = $1", [String(user.id)]);
-        const subscribed = subscription.rows[0]?.subscribed === true;
+        const subscribed = store.isSubscribed(user.id);
         const status = await getBotStatus();
-        await ctx.replyWithPhoto(new InputFile(landscapePath), {
+        await ctx.replyWithAnimation(new InputFile(menuAnimationPath), {
             caption: menuCaption("home", user.first_name, subscribed, status),
             reply_markup: menuKeyboard("home", config.adminIds.has(String(user.id)), subscribed)
         });
     }
     async function saveUser(from) {
-        const id = String(from.id);
-        await pool.query(`INSERT INTO telegram_users (telegram_id, username, first_name, last_name)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (telegram_id) DO UPDATE SET
-         username = EXCLUDED.username,
-         first_name = EXCLUDED.first_name,
-         last_name = EXCLUDED.last_name,
-         last_seen_at = NOW()`, [id, from.username ?? null, from.first_name, from.last_name ?? null]);
-        const result = await pool.query("SELECT banned FROM telegram_users WHERE telegram_id = $1", [id]);
-        return result.rows[0]?.banned === true;
+        return store.saveUser(from);
     }
     bot.use(async (ctx, next) => {
         if (!ctx.from)
@@ -184,6 +132,36 @@ export function createBot(config, pool) {
                 await ctx.reply("Akses bot Anda dibatasi oleh admin.");
             return;
         }
+        const chatId = ctx.chat?.id;
+        if (chatId !== undefined && !configuredCommandChats.has(chatId)) {
+            try {
+                await bot.api.setMyCommands([
+                    { command: "start", description: "Buka menu bot" },
+                    { command: "help", description: "Buka bantuan bot" },
+                    { command: "pin", description: "Cari gambar Pinterest" },
+                    { command: "pinvid", description: "Cari video Pinterest" },
+                    { command: "tourl", description: "Ubah media reply menjadi tautan" },
+                    { command: "profile", description: "Lihat profil Telegram" },
+                    { command: "id", description: "Lihat ID Telegram" },
+                    { command: "ping", description: "Cek status bot" },
+                    { command: "time", description: "Lihat waktu Jakarta" },
+                    { command: "calc", description: "Kalkulator" },
+                    { command: "random", description: "Angka acak" },
+                    { command: "quote", description: "Kutipan acak" },
+                    { command: "subscribe", description: "Langganan pengumuman" },
+                    { command: "unsubscribe", description: "Berhenti dari pengumuman" },
+                    { command: "stats", description: "Statistik admin" },
+                    { command: "users", description: "Jumlah subscriber admin" },
+                    { command: "broadcast", description: "Kirim pengumuman admin" },
+                    { command: "ban", description: "Blokir pengguna (admin)" },
+                    { command: "unban", description: "Pulihkan pengguna (admin)" }
+                ], { scope: { type: "chat", chat_id: chatId } });
+                configuredCommandChats.add(chatId);
+            }
+            catch (error) {
+                console.error("Could not update Telegram chat commands:", error);
+            }
+        }
         return next();
     });
     bot.command("start", async (ctx) => {
@@ -192,15 +170,14 @@ export function createBot(config, pool) {
     bot.command("help", async (ctx) => {
         await sendMainMenu(ctx);
     });
-    bot.callbackQuery(/^menu:(home|tools|account|ai|updates|admin|calc)$/, async (ctx) => {
+    bot.callbackQuery(/^menu:(home|tools|account|updates|admin|calc)$/, async (ctx) => {
         const user = getSender(ctx);
         const page = ctx.match[1];
         if (page === "admin" && !config.adminIds.has(String(user.id))) {
             await ctx.answerCallbackQuery({ text: "Menu khusus admin.", show_alert: true });
             return;
         }
-        const subscription = await pool.query("SELECT subscribed FROM telegram_users WHERE telegram_id = $1", [String(user.id)]);
-        const subscribed = subscription.rows[0]?.subscribed === true;
+        const subscribed = store.isSubscribed(user.id);
         const status = page === "home" || page === "tools"
             ? await getBotStatus()
             : undefined;
@@ -230,23 +207,17 @@ export function createBot(config, pool) {
         if (action === "id")
             return ctx.reply(`Telegram ID: ${user.id}`);
         if (action === "pinterest") {
-            return ctx.reply("Cari gambar dengan /pinterest cat atau /pin cat.\nCari video dengan /pinvid cat atau /pv cat.");
+            return ctx.reply("Cari gambar dengan /pin cat.\nCari video dengan /pinvid cat.");
         }
         if (action === "pinvid") {
-            return ctx.reply("Cari video dengan format:\n/pinvid cat\nAlias: /pv cat");
+            return ctx.reply("Cari video dengan format:\n/pinvid cat");
         }
         if (action === "tourl") {
             return ctx.reply("Balas (reply) foto, video, audio, atau dokumen dengan /tourl untuk membuat tautan Kappa.");
         }
-        if (action === "ai-help")
-            return ctx.reply("Kirim pertanyaan dengan format:\n/ai tuliskan pertanyaanmu");
-        if (action === "ai-reset") {
-            aiHistory.delete(String(user.id));
-            return ctx.reply("Konteks percakapan AI sudah dihapus.");
-        }
         if (action === "subscribe" || action === "unsubscribe") {
             const subscribed = action === "subscribe";
-            await pool.query("UPDATE telegram_users SET subscribed = $1 WHERE telegram_id = $2", [subscribed, String(user.id)]);
+            store.setSubscribed(user.id, subscribed);
             await ctx.editMessageCaption({
                 caption: menuCaption("updates", user.first_name, subscribed),
                 reply_markup: menuKeyboard("updates", config.adminIds.has(String(user.id)), subscribed)
@@ -263,14 +234,9 @@ export function createBot(config, pool) {
                 return ctx.reply("Perintah khusus admin.");
             }
             if (action === "users") {
-                const result = await pool.query("SELECT COUNT(*)::int AS count FROM telegram_users WHERE subscribed AND NOT banned");
-                return ctx.reply(`📨 Penerima broadcast aktif: ${result.rows[0].count}`);
+                return ctx.reply(`📨 Penerima broadcast aktif: ${store.countSubscribers()}`);
             }
-            const result = await pool.query(`SELECT COUNT(*)::int AS total,
-                COUNT(*) FILTER (WHERE subscribed AND NOT banned)::int AS subscribers,
-                COUNT(*) FILTER (WHERE banned)::int AS banned
-         FROM telegram_users`);
-            const stats = result.rows[0];
+            const stats = store.getStats();
             return ctx.reply(`📊 Statistik\nPengguna terdaftar: ${stats.total}\nSubscriber broadcast: ${stats.subscribers}\nDiblokir: ${stats.banned}`);
         }
         if (action.startsWith("calc:")) {
@@ -298,107 +264,6 @@ export function createBot(config, pool) {
     bot.command("id", (ctx) => ctx.reply(`Telegram ID: ${getSender(ctx).id}`));
     bot.command("ping", (ctx) => ctx.reply("🏓 Pong! Bot aktif."));
     bot.command("time", (ctx) => ctx.reply(`🕒 ${formatJakartaTime()}`));
-    bot.command("apis", async (ctx) => {
-        const query = ctx.match.trim().toLowerCase();
-        try {
-            const catalog = await getNeoXrCatalog();
-            if (!query) {
-                const categories = new Map();
-                for (const endpoint of catalog)
-                    categories.set(endpoint.category, (categories.get(endpoint.category) ?? 0) + 1);
-                const list = [...categories.entries()]
-                    .sort(([first], [second]) => first.localeCompare(second))
-                    .map(([category, count]) => `• ${category} (${count})`);
-                await ctx.reply(`📚 Katalog NeoXR (${catalog.length} endpoint aktif)\n\n${list.join("\n")}\n\nCari: /apis <nama atau kategori>`);
-                return;
-            }
-            const results = catalog.filter((endpoint) => endpoint.name.toLowerCase().includes(query) ||
-                endpoint.category.toLowerCase().includes(query) ||
-                endpoint.id.includes(query) ||
-                endpoint.path.toLowerCase().includes(query)).slice(0, 18);
-            if (results.length === 0) {
-                await ctx.reply("Tidak ada endpoint yang cocok. Gunakan /apis untuk melihat kategori.");
-                return;
-            }
-            const lines = results.map((endpoint) => {
-                const usage = endpoint.required.length === 1
-                    ? `<${endpoint.required[0]}>`
-                    : endpoint.required.map((key) => `${key}=<nilai>`).join(" ");
-                const plan = endpoint.premium ? " · Premium" : "";
-                return `• ${endpoint.name} [${endpoint.category}${plan}]\n  /neoxr ${endpoint.id}${usage ? ` ${usage}` : ""}`;
-            });
-            await ctx.reply(`🔎 Hasil katalog NeoXR (${results.length} ditampilkan)\n\n${lines.join("\n")}`);
-        }
-        catch (error) {
-            console.error("NeoXR catalog request failed:", error instanceof Error ? error.message : "Unknown error");
-            await ctx.reply("Tidak dapat memuat katalog NeoXR sekarang. Coba lagi nanti.");
-        }
-    });
-    bot.command("neoxr", async (ctx) => {
-        const input = ctx.match.trim();
-        const separator = input.search(/\s/);
-        const id = separator === -1 ? input : input.slice(0, separator);
-        const rawArguments = separator === -1 ? "" : input.slice(separator + 1);
-        if (!id) {
-            await ctx.reply("Format: /neoxr <endpoint> key=value\nCari endpoint dengan /apis atau /apis <nama>.");
-            return;
-        }
-        if (!config.aiApiKey) {
-            await ctx.reply("NEOXR_API_KEY belum dikonfigurasi di .env.");
-            return;
-        }
-        try {
-            const catalog = await getNeoXrCatalog();
-            const endpoint = resolveNeoXrEndpoint(catalog, id);
-            if (!endpoint) {
-                await ctx.reply(`Endpoint "${id}" tidak ditemukan atau tidak aktif. Cari dengan /apis ${id}.`);
-                return;
-            }
-            let parameters;
-            try {
-                parameters = parseNeoXrArguments(endpoint, rawArguments);
-            }
-            catch (error) {
-                await ctx.reply(`${error instanceof Error ? error.message : "Parameter tidak valid"}\n\nContoh: /neoxr ${endpoint.id} ${endpoint.required.map((key) => `${key}=<nilai>`).join(" ") || "(tanpa parameter)"}`);
-                return;
-            }
-            await ctx.replyWithChatAction("typing");
-            const url = buildNeoXrEndpointUrl(config.aiApiUrl, config.aiApiKey, endpoint, parameters);
-            const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
-            if (!response.ok) {
-                console.error(`NeoXR endpoint ${endpoint.path} returned HTTP ${response.status}`);
-                await ctx.reply(`NeoXR mengembalikan HTTP ${response.status}. Periksa parameter, status endpoint, dan kuota API.`);
-                return;
-            }
-            const contentLength = Number(response.headers.get("content-length"));
-            if (Number.isFinite(contentLength) && contentLength > 1_000_000) {
-                await ctx.reply("Respons NeoXR terlalu besar untuk ditampilkan.");
-                return;
-            }
-            const text = await response.text();
-            if (text.length > 1_000_000) {
-                await ctx.reply("Respons NeoXR terlalu besar untuk ditampilkan.");
-                return;
-            }
-            let payload;
-            try {
-                payload = JSON.parse(text);
-            }
-            catch {
-                payload = text;
-            }
-            const fullOutput = formatNeoXrPayload(payload);
-            const output = fullOutput.length > 11_400
-                ? `${fullOutput.slice(0, 11_400)}\n\n[Respons dipotong agar tidak terlalu panjang.]`
-                : fullOutput;
-            for (let offset = 0; offset < output.length; offset += 3800)
-                await ctx.reply(output.slice(offset, offset + 3800));
-        }
-        catch (error) {
-            console.error("NeoXR documented endpoint request failed:", error instanceof Error ? error.name : "Unknown error");
-            await ctx.reply("Tidak dapat menjalankan endpoint NeoXR sekarang. Coba lagi nanti.");
-        }
-    });
     bot.command("calc", async (ctx) => {
         const result = calculate(ctx.match);
         if (result === undefined) {
@@ -490,8 +355,40 @@ export function createBot(config, pool) {
             await ctx.reply(`Tidak dapat mengambil ${type === "image" ? "gambar" : "video"} sekarang. Coba lagi nanti.`);
         }
     }
-    bot.command(["pinterest", "pin"], (ctx) => searchPinterest(ctx, ctx.match, "image"));
-    bot.command(["pinvid", "pv"], (ctx) => searchPinterest(ctx, ctx.match, "video"));
+    bot.command("pin", (ctx) => searchPinterest(ctx, ctx.match, "image"));
+    bot.command("pinvid", (ctx) => searchPinterest(ctx, ctx.match, "video"));
+    bot.command("soundcloud", async (ctx) => {
+        const query = ctx.match.trim();
+        if (!query) {
+            await ctx.reply("Format: /soundcloud kata kunci\nContoh: /soundcloud duka");
+            return;
+        }
+        if (query.length > 150) {
+            await ctx.reply("Kata kunci terlalu panjang (maksimal 150 karakter).");
+            return;
+        }
+        await ctx.replyWithChatAction("typing");
+        try {
+            const response = await fetch(buildSoundCloudSearchUrl(query), {
+                signal: AbortSignal.timeout(30_000)
+            });
+            if (!response.ok) {
+                console.error(`SoundCloud search API returned HTTP ${response.status}`);
+                await ctx.reply("Pencarian SoundCloud sedang bermasalah. Coba lagi nanti.");
+                return;
+            }
+            const tracks = extractSoundCloudTracks(await response.json(), 5);
+            if (tracks.length === 0) {
+                await ctx.reply("Tidak ada lagu SoundCloud yang ditemukan. Coba kata kunci lain.");
+                return;
+            }
+            await ctx.reply(`🔎 Hasil SoundCloud untuk “${query}”\n\n${tracks.map(formatSoundCloudTrack).join("\n\n")}`);
+        }
+        catch (error) {
+            console.error("SoundCloud search failed:", error instanceof Error ? error.name : "Unknown error");
+            await ctx.reply("Tidak dapat mencari SoundCloud sekarang. Coba lagi nanti.");
+        }
+    });
     bot.command("tourl", async (ctx) => {
         const source = ctx.msg.reply_to_message;
         if (!source) {
@@ -606,85 +503,25 @@ export function createBot(config, pool) {
     bot.command("quote", (ctx) => ctx.reply(`💡 ${quotes[randomInteger(0, quotes.length - 1) ?? 0]}`));
     bot.command("subscribe", async (ctx) => {
         const user = getSender(ctx);
-        await pool.query("UPDATE telegram_users SET subscribed = TRUE WHERE telegram_id = $1", [String(user.id)]);
+        store.setSubscribed(user.id, true);
         await ctx.reply("✅ Kamu berlangganan pengumuman admin. Kirim /unsubscribe kapan saja untuk berhenti.");
     });
     bot.command("unsubscribe", async (ctx) => {
         const user = getSender(ctx);
-        await pool.query("UPDATE telegram_users SET subscribed = FALSE WHERE telegram_id = $1", [String(user.id)]);
+        store.setSubscribed(user.id, false);
         await ctx.reply("Kamu berhenti berlangganan pengumuman. Gunakan /subscribe untuk bergabung lagi.");
-    });
-    bot.command("ai", async (ctx) => {
-        const prompt = ctx.match.trim();
-        if (!prompt) {
-            await ctx.reply("Format: /ai tuliskan pertanyaanmu");
-            return;
-        }
-        if (!config.aiApiKey) {
-            await ctx.reply("Fitur AI belum diaktifkan oleh admin.");
-            return;
-        }
-        if (prompt.length > 3000) {
-            await ctx.reply("Pesan terlalu panjang (maksimal 3.000 karakter).");
-            return;
-        }
-        const userId = String(getSender(ctx).id);
-        const history = aiHistory.get(userId) ?? [];
-        const userMessage = { role: "user", content: prompt };
-        const messages = [
-            ...history,
-            userMessage
-        ].slice(-10);
-        const query = messages.map((message) => `${message.role}: ${message.content}`).join("\n");
-        await ctx.replyWithChatAction("typing");
-        try {
-            const response = await fetch(buildNeoXrUrl(config.aiApiUrl, config.aiApiKey, query), { signal: AbortSignal.timeout(30_000) });
-            if (!response.ok) {
-                console.error(`NeoXR request failed with HTTP ${response.status}`);
-                await ctx.reply("Layanan AI sedang bermasalah. Coba lagi nanti.");
-                return;
-            }
-            const payload = await response.json();
-            const answer = extractNeoXrAnswer(payload);
-            if (!answer) {
-                console.error("NeoXR returned an unrecognized response.");
-                await ctx.reply("Layanan AI mengirim respons kosong.");
-                return;
-            }
-            const updatedHistory = [
-                ...messages,
-                { role: "assistant", content: answer }
-            ];
-            aiHistory.set(userId, updatedHistory.slice(-10));
-            for (let offset = 0; offset < answer.length; offset += 4000) {
-                await ctx.reply(answer.slice(offset, offset + 4000));
-            }
-        }
-        catch (error) {
-            console.error("AI request failed:", error);
-            await ctx.reply("Tidak dapat menghubungi layanan AI saat ini.");
-        }
-    });
-    bot.command("resetai", async (ctx) => {
-        aiHistory.delete(String(getSender(ctx).id));
-        await ctx.reply("Konteks percakapan AI sudah dihapus.");
     });
     const isAdmin = (id) => config.adminIds.has(String(id));
     bot.command("stats", async (ctx) => {
         if (!isAdmin(getSender(ctx).id))
             return ctx.reply("Perintah khusus admin.");
-        const result = await pool.query(`SELECT COUNT(*)::int AS total,
-              COUNT(*) FILTER (WHERE subscribed AND NOT banned)::int AS subscribers,
-              COUNT(*) FILTER (WHERE banned)::int AS banned
-       FROM telegram_users`);
-        const stats = result.rows[0];
+        const stats = store.getStats();
         await ctx.reply(`📊 Statistik\nPengguna terdaftar: ${stats.total}\nSubscriber broadcast: ${stats.subscribers}\nDiblokir: ${stats.banned}`);
     });
     bot.command("users", async (ctx) => {
         if (!isAdmin(getSender(ctx).id))
             return ctx.reply("Perintah khusus admin.");
-        const result = await pool.query("SELECT COUNT(*)::int AS count FROM telegram_users WHERE subscribed AND NOT banned");
-        await ctx.reply(`📨 Penerima broadcast aktif: ${result.rows[0].count}`);
+        await ctx.reply(`📨 Penerima broadcast aktif: ${store.countSubscribers()}`);
     });
     bot.command("broadcast", async (ctx) => {
         const user = getSender(ctx);
@@ -722,10 +559,10 @@ export function createBot(config, pool) {
         pendingBroadcasts.delete(key);
         await ctx.answerCallbackQuery({ text: "Broadcast dimulai." });
         await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
-        const subscribers = await pool.query("SELECT telegram_id FROM telegram_users WHERE subscribed AND NOT banned");
+        const subscribers = store.listSubscribers();
         let sent = 0;
         let failed = 0;
-        for (const row of subscribers.rows) {
+        for (const row of subscribers) {
             try {
                 await bot.api.sendMessage(row.telegram_id, text);
                 sent += 1;
@@ -733,7 +570,7 @@ export function createBot(config, pool) {
             catch (error) {
                 failed += 1;
                 if (error instanceof GrammyError && error.error_code === 403) {
-                    await pool.query("UPDATE telegram_users SET subscribed = FALSE WHERE telegram_id = $1", [row.telegram_id]);
+                    store.setSubscribed(row.telegram_id, false);
                 }
                 else {
                     console.error(`Broadcast delivery failed for Telegram ID ${row.telegram_id}:`, error);
@@ -750,8 +587,7 @@ export function createBot(config, pool) {
         if (!/^\d+$/.test(target) || config.adminIds.has(target)) {
             return ctx.reply("Format: /ban ID (admin tidak dapat diblokir)");
         }
-        const result = await pool.query("UPDATE telegram_users SET banned = TRUE WHERE telegram_id = $1", [target]);
-        await ctx.reply(result.rowCount ? `Pengguna ${target} diblokir.` : "Pengguna tidak ditemukan.");
+        await ctx.reply(store.setBanned(target, true) ? `Pengguna ${target} diblokir.` : "Pengguna tidak ditemukan.");
     });
     bot.command("unban", async (ctx) => {
         if (!isAdmin(getSender(ctx).id))
@@ -759,8 +595,57 @@ export function createBot(config, pool) {
         const target = ctx.match.trim();
         if (!/^\d+$/.test(target))
             return ctx.reply("Format: /unban ID");
-        const result = await pool.query("UPDATE telegram_users SET banned = FALSE WHERE telegram_id = $1", [target]);
-        await ctx.reply(result.rowCount ? `Akses pengguna ${target} dipulihkan.` : "Pengguna tidak ditemukan.");
+        await ctx.reply(store.setBanned(target, false) ? `Akses pengguna ${target} dipulihkan.` : "Pengguna tidak ditemukan.");
+    });
+    bot.on("message:text", async (ctx) => {
+        if (ctx.chat.type !== "private" ||
+            ctx.msg.entities?.some((entity) => entity.type === "bot_command" && entity.offset === 0)) {
+            return;
+        }
+        const prompt = ctx.msg.text.trim();
+        if (!prompt)
+            return;
+        if (prompt.length > 3000) {
+            await ctx.reply("Pesan terlalu panjang untuk AI (maksimal 3.000 karakter).");
+            return;
+        }
+        if (!config.aiApiKey) {
+            await ctx.reply("AI belum dikonfigurasi. Admin perlu mengisi NEOXR_API_KEY di .env.");
+            return;
+        }
+        const userId = String(getSender(ctx).id);
+        if (aiInFlight.has(userId)) {
+            await ctx.reply("AI masih memproses pesanmu. Tunggu sebentar lalu kirim lagi.");
+            return;
+        }
+        aiInFlight.add(userId);
+        try {
+            await ctx.replyWithChatAction("typing");
+            const response = await fetch(buildNeoXrUrl(config.aiApiUrl, config.aiApiKey, prompt), {
+                signal: AbortSignal.timeout(30_000)
+            });
+            if (!response.ok) {
+                console.error(`NeoXR automatic AI request failed with HTTP ${response.status}`);
+                await ctx.reply("Layanan AI sedang bermasalah. Coba lagi nanti.");
+                return;
+            }
+            const payload = await response.json();
+            const answer = extractNeoXrAnswer(payload);
+            if (!answer) {
+                console.error("NeoXR automatic AI returned an empty or unrecognized response.");
+                await ctx.reply("AI tidak mengirim jawaban. Coba tulis ulang pesanmu.");
+                return;
+            }
+            for (let offset = 0; offset < answer.length; offset += 4000)
+                await ctx.reply(answer.slice(offset, offset + 4000));
+        }
+        catch (error) {
+            console.error("NeoXR automatic AI request failed:", error instanceof Error ? error.name : "Unknown error");
+            await ctx.reply("Tidak dapat menghubungi AI sekarang. Coba lagi nanti.");
+        }
+        finally {
+            aiInFlight.delete(userId);
+        }
     });
     bot.catch((error) => {
         console.error(`Telegram update failed (${error.ctx.update.update_id}):`, error.error);

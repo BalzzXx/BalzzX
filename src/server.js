@@ -1,11 +1,41 @@
 import { createBot } from "./bot.js";
 import { loadConfig } from "./config.js";
 import { createDatabase, initializeDatabase } from "./db.js";
+
 const config = loadConfig();
-const pool = createDatabase(config.databaseUrl);
-const bot = createBot(config, pool);
+const database = createDatabase(config.databasePath);
+let store;
+
 try {
-    await initializeDatabase(pool);
+    store = initializeDatabase(database);
+    const bot = createBot(config, store);
+    try {
+        await bot.api.setMyCommands([
+            { command: "start", description: "Buka menu bot" },
+            { command: "help", description: "Buka bantuan bot" },
+            { command: "pin", description: "Cari gambar Pinterest" },
+            { command: "pinvid", description: "Cari video Pinterest" },
+            { command: "soundcloud", description: "Cari lagu di SoundCloud" },
+            { command: "tourl", description: "Ubah media reply menjadi tautan" },
+            { command: "profile", description: "Lihat profil Telegram" },
+            { command: "id", description: "Lihat ID Telegram" },
+            { command: "ping", description: "Cek status bot" },
+            { command: "time", description: "Lihat waktu Jakarta" },
+            { command: "calc", description: "Kalkulator" },
+            { command: "random", description: "Angka acak" },
+            { command: "quote", description: "Kutipan acak" },
+            { command: "subscribe", description: "Langganan pengumuman" },
+            { command: "unsubscribe", description: "Berhenti dari pengumuman" },
+            { command: "stats", description: "Statistik admin" },
+            { command: "users", description: "Jumlah subscriber admin" },
+            { command: "broadcast", description: "Kirim pengumuman admin" },
+            { command: "ban", description: "Blokir pengguna (admin)" },
+            { command: "unban", description: "Pulihkan pengguna (admin)" }
+        ]);
+    }
+    catch (error) {
+        console.error("Could not register Telegram bot commands:", error);
+    }
     for (const signal of ["SIGINT", "SIGTERM"]) {
         process.once(signal, () => {
             bot.stop();
@@ -22,5 +52,8 @@ catch (error) {
     process.exitCode = 1;
 }
 finally {
-    await pool.end();
+    if (store)
+        store.close();
+    else
+        database.close();
 }
