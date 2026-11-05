@@ -5,6 +5,7 @@ import { buildNeoXrUrl, extractNeoXrAnswer } from "./neoxr.js";
 import { buildPinterestUrl, downloadPinterestVideo, extractPinterestMedia } from "./pinterest.js";
 import { buildIqcUrl, downloadIqcImage, extractIqcImage } from "./iqc.js";
 import { buildImageUpscaleUrl, convertVideoToHd, downloadUpscaledImage, extractUpscaledImageUrl } from "./hd.js";
+import { formatIncomingMessage } from "./message-log.js";
 import { buildSoundCloudSearchUrl, extractSoundCloudTracks, formatSoundCloudTrack } from "./soundcloud.js";
 import { extractKappaLink, KAPPA_UPLOAD_URL, MAX_TELEGRAM_FILE_SIZE, safeFileName } from "./tourl.js";
 function getSender(ctx) {
@@ -75,7 +76,9 @@ function menuCaption(page, name, subscribed, status) {
             "/pinterest kucing (alias /pin) — cari gambar",
             "/pinvid kucing (alias /pv) — cari video",
             "/iqc teks — buat iPhone quoted (alias /quoted)",
-            "/hd — balas foto/video untuk meningkatkan resolusi",
+            "/hd — balas foto/video untuk meningkatkan resolusi (premium)",
+            "/daftar — registrasi akun",
+            "/premium — cek status premium",
             "/soundcloud du ka — cari lagu di SoundCloud",
             "/tourl — reply media untuk membuat tautan"
         ].join("\n");
@@ -95,6 +98,7 @@ export function createBot(config, store, menuMedia) {
     const pendingBroadcasts = new Map();
     const configuredCommandChats = new Set();
     const aiInFlight = new Set();
+    const registrationCommands = new Set(["start", "daftar", "profile"]);
     async function getBotStatus() {
         const before = Date.now();
         try {
@@ -130,6 +134,8 @@ export function createBot(config, store, menuMedia) {
         return store.saveUser(from);
     }
     bot.use(async (ctx, next) => {
+        if (ctx.msg && ctx.from && ctx.chat)
+            console.log(formatIncomingMessage(ctx.msg, ctx.from, ctx.chat));
         if (!ctx.from)
             return next();
         const banned = await saveUser(ctx.from);
@@ -138,6 +144,21 @@ export function createBot(config, store, menuMedia) {
                 await ctx.answerCallbackQuery({ text: "Akses bot Anda dibatasi." });
             else if (ctx.chat)
                 await ctx.reply("Akses bot Anda dibatasi oleh admin.");
+            return;
+        }
+        if (ctx.callbackQuery && !store.isRegistered(ctx.from.id)) {
+            await ctx.answerCallbackQuery({ text: "Daftar dahulu dengan /daftar.", show_alert: true });
+            return;
+        }
+        const command = ctx.msg?.entities?.find((entity) =>
+            entity.type === "bot_command" && entity.offset === 0
+        );
+        const commandName = command
+            ? ctx.msg.text.slice(1, command.length).split("@", 1)[0].toLowerCase()
+            : undefined;
+        if (!store.isRegistered(ctx.from.id) && !registrationCommands.has(commandName ?? "")) {
+            if (ctx.chat)
+                await ctx.reply("Akun belum terdaftar. Kirim /daftar untuk mendaftar terlebih dahulu.");
             return;
         }
         const chatId = ctx.chat?.id;
@@ -151,6 +172,10 @@ export function createBot(config, store, menuMedia) {
                     { command: "iqc", description: "Buat iPhone quoted" },
                     { command: "quoted", description: "Buat iPhone quoted" },
                     { command: "hd", description: "Tingkatkan resolusi foto/video" },
+                    { command: "daftar", description: "Daftarkan akun bot" },
+                    { command: "premium", description: "Cek status premium" },
+                    { command: "addprem", description: "Owner: beri premium" },
+                    { command: "delprem", description: "Owner: cabut premium" },
                     { command: "tourl", description: "Ubah media reply menjadi tautan" },
                     { command: "profile", description: "Lihat profil Telegram" },
                     { command: "id", description: "Lihat ID Telegram" },
@@ -180,6 +205,18 @@ export function createBot(config, store, menuMedia) {
     });
     bot.command("help", async (ctx) => {
         await sendMainMenu(ctx);
+    });
+    bot.command("daftar", async (ctx) => {
+        const user = getSender(ctx);
+        if (ctx.chat?.type !== "private") {
+            await ctx.reply("Kirim /daftar di chat pribadi dengan bot.");
+            return;
+        }
+        if (!store.registerUser(user.id)) {
+            await ctx.reply("Tidak dapat menyimpan pendaftaran. Coba lagi nanti.");
+            return;
+        }
+        await ctx.reply("✅ Pendaftaran berhasil. Sekarang kamu bisa menggunakan bot.");
     });
     bot.callbackQuery(/^menu:(home|tools|account|updates|admin|calc)$/, async (ctx) => {
         const user = getSender(ctx);
@@ -413,6 +450,10 @@ export function createBot(config, store, menuMedia) {
     bot.command("iqc", createIqc);
     bot.command("quoted", createIqc);
     bot.command("hd", async (ctx) => {
+        if (!store.isPremium(getSender(ctx).id)) {
+            await ctx.reply("Fitur /hd khusus pengguna premium. Hubungi owner bot untuk mengaktifkan premium.");
+            return;
+        }
         const source = ctx.msg.reply_to_message;
         if (!source) {
             await ctx.reply("Balas foto atau video dengan /hd untuk meningkatkan resolusinya.\nFoto diunggah ke Kappa lalu diproses NeoXR; video di-upscale lokal ke HD 1080.");
@@ -649,7 +690,40 @@ export function createBot(config, store, menuMedia) {
         store.setSubscribed(user.id, false);
         await ctx.reply("Kamu berhenti berlangganan pengumuman. Gunakan /subscribe untuk bergabung lagi.");
     });
+    bot.command("premium", async (ctx) => {
+        const expiresAt = store.getPremiumUntil(getSender(ctx).id);
+        if (!expiresAt || expiresAt <= Date.now()) {
+            await ctx.reply("Status premium: tidak aktif.");
+            return;
+        }
+        await ctx.reply(`⭐ Status premium: aktif\nBerlaku sampai: ${new Date(expiresAt).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })} WIB`);
+    });
     const isAdmin = (id) => config.adminIds.has(String(id));
+    const isOwner = (id) => config.ownerIds.has(String(id));
+    bot.command("addprem", async (ctx) => {
+        if (!isOwner(getSender(ctx).id))
+            return ctx.reply("Perintah khusus owner.");
+        const [target, daysText, ...extra] = ctx.match.trim().split(/\s+/);
+        const days = Number(daysText);
+        if (!/^\d+$/.test(target ?? "") || !/^\d+$/.test(daysText ?? "") ||
+            !Number.isSafeInteger(days) || days < 1 || days > 3650 || extra.length > 0) {
+            return ctx.reply("Format: /addprem ID HARI (1-3650)\nTarget harus sudah mendaftar dengan /daftar.");
+        }
+        const expiresAt = store.grantPremium(target, days);
+        if (!expiresAt)
+            return ctx.reply("Pengguna tidak ditemukan atau belum mendaftar.");
+        await ctx.reply(`⭐ Premium diberikan kepada ${target} selama ${days} hari.\nBerlaku sampai: ${new Date(expiresAt).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })} WIB`);
+    });
+    bot.command("delprem", async (ctx) => {
+        if (!isOwner(getSender(ctx).id))
+            return ctx.reply("Perintah khusus owner.");
+        const target = ctx.match.trim();
+        if (!/^\d+$/.test(target))
+            return ctx.reply("Format: /delprem ID");
+        if (!store.removePremium(target))
+            return ctx.reply("Pengguna tidak ditemukan.");
+        await ctx.reply(`Premium pengguna ${target} dicabut.`);
+    });
     bot.command("stats", async (ctx) => {
         if (!isAdmin(getSender(ctx).id))
             return ctx.reply("Perintah khusus admin.");

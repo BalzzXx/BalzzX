@@ -4,6 +4,7 @@ import { z } from "zod";
 const schema = z.object({
     BOT_TOKEN: z.string().min(1, "Set BOT_TOKEN in .env using a fresh token from BotFather"),
     BOT_ADMIN_IDS: z.string().min(1).default("6388490164"),
+    BOT_OWNER_IDS: z.string().default(""),
     DATABASE_PATH: z.string().min(1).default("./data/balzzx.sqlite"),
     MENU_MEDIA_URL: z.string().url().default("https://kappa.lol/5VJjsi"),
     NEOXR_API_URL: z.string().url().default("https://api.neoxr.eu/api/gpt-pro"),
@@ -20,9 +21,13 @@ export function loadConfig() {
     const adminIds = parsed.data.BOT_ADMIN_IDS.split(",").map((id) => id.trim());
     if (adminIds.some((id) => !/^\d+$/.test(id)))
         throw new Error("BOT_ADMIN_IDS must be a comma-separated list of Telegram numeric IDs");
+    const ownerIds = parsed.data.BOT_OWNER_IDS.split(",").map((id) => id.trim()).filter(Boolean);
+    if (ownerIds.some((id) => !/^\d+$/.test(id)))
+        throw new Error("BOT_OWNER_IDS must be a comma-separated list of Telegram numeric IDs");
     return {
         token: parsed.data.BOT_TOKEN,
         adminIds: new Set(adminIds),
+        ownerIds: new Set(ownerIds),
         databasePath: parsed.data.DATABASE_PATH,
         menuMediaUrl: parsed.data.MENU_MEDIA_URL,
         aiApiUrl: parsed.data.NEOXR_API_URL,

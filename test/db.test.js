@@ -13,6 +13,9 @@ test("SQLite user data and subscription state persist across restarts", (context
 
     const firstStore = initializeDatabase(createDatabase(databasePath));
     assert.equal(firstStore.saveUser(user), false);
+    assert.equal(firstStore.isRegistered(user.id), false);
+    assert.equal(firstStore.registerUser(user.id), true);
+    assert.equal(firstStore.isRegistered(user.id), true);
     assert.equal(firstStore.isSubscribed(user.id), false);
     assert.equal(firstStore.setSubscribed(user.id, true), true);
     assert.equal(firstStore.setBanned(user.id, true), true);
@@ -29,6 +32,53 @@ test("SQLite user data and subscription state persist across restarts", (context
     assert.deepEqual(reopenedStore.listSubscribers(), [{ telegram_id: "123" }]);
     assert.deepEqual(reopenedStore.getStats(), { total: 1, subscribers: 1, banned: 0 });
     reopenedStore.close();
+});
+
+test("premium access expires, extends from the current expiry, and can be revoked", (context) => {
+    const directory = mkdtempSync(join(tmpdir(), "balzzx-db-premium-"));
+    context.after(() => rmSync(directory, { recursive: true, force: true }));
+    const store = initializeDatabase(createDatabase(join(directory, "bot.sqlite")));
+    const user = { id: 456, first_name: "Premium" };
+    const now = 1_800_000_000_000;
+
+    store.saveUser(user);
+    assert.equal(store.grantPremium(user.id, 30, now), undefined);
+    store.registerUser(user.id);
+    assert.equal(store.isPremium(user.id, now), false);
+    const firstExpiry = store.grantPremium(user.id, 30, now);
+    assert.equal(firstExpiry, now + 30 * 24 * 60 * 60 * 1000);
+    assert.equal(store.isPremium(user.id, now), true);
+    assert.equal(store.isPremium(user.id, firstExpiry), false);
+    assert.equal(store.grantPremium(user.id, 5, now + 10 * 24 * 60 * 60 * 1000), firstExpiry + 5 * 24 * 60 * 60 * 1000);
+    assert.equal(store.removePremium(user.id), true);
+    assert.equal(store.getPremiumUntil(user.id), undefined);
+    assert.equal(store.isPremium(user.id, now), false);
+    store.close();
+});
+
+test("existing SQLite schemas are migrated without registering old users", (context) => {
+    const directory = mkdtempSync(join(tmpdir(), "balzzx-db-migration-"));
+    context.after(() => rmSync(directory, { recursive: true, force: true }));
+    const database = createDatabase(join(directory, "legacy.sqlite"));
+    database.exec(`
+        CREATE TABLE telegram_users (
+            telegram_id TEXT PRIMARY KEY,
+            username TEXT,
+            first_name TEXT NOT NULL,
+            last_name TEXT,
+            subscribed INTEGER NOT NULL DEFAULT 0,
+            banned INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO telegram_users (telegram_id, first_name) VALUES ('789', 'Legacy');
+    `);
+    const store = initializeDatabase(database);
+    assert.equal(store.isRegistered("789"), false);
+    assert.equal(store.getPremiumUntil("789"), undefined);
+    assert.equal(store.registerUser("789"), true);
+    assert.equal(store.isRegistered("789"), true);
+    store.close();
 });
 
 test("SQLite stats return zeroes for an empty database", (context) => {
