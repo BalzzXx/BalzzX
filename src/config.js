@@ -11,6 +11,8 @@ const schema = z.object({
     NEOXR_PINTEREST_URL: z.string().url().default("https://api.neoxr.eu/api/pinterest-v2"),
     NEOXR_IQC_URL: z.string().url().default("https://api.neoxr.eu/api/iqc"),
     NEOXR_UPSCALE_URL: z.string().url().default("https://api.neoxr.eu/api/upscale"),
+    HENTAI_API_URL: z.string().url().default("https://free-restapi.biz.id/api/hentai"),
+    HENTAI_API_KEY: z.string().optional(),
     NEOXR_API_KEY: z.string().optional()
 });
 
@@ -34,6 +36,8 @@ export function loadConfig() {
         pinterestApiUrl: parsed.data.NEOXR_PINTEREST_URL,
         iqcApiUrl: parsed.data.NEOXR_IQC_URL,
         upscaleApiUrl: parsed.data.NEOXR_UPSCALE_URL,
+        hentaiApiUrl: parsed.data.HENTAI_API_URL,
+        hentaiApiKey: parsed.data.HENTAI_API_KEY,
         aiApiKey: parsed.data.NEOXR_API_KEY
     };
 }

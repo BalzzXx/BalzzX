@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS telegram_users (
   subscribed INTEGER NOT NULL DEFAULT 0 CHECK (subscribed IN (0, 1)),
   banned INTEGER NOT NULL DEFAULT 0 CHECK (banned IN (0, 1)),
   is_registered INTEGER NOT NULL DEFAULT 0 CHECK (is_registered IN (0, 1)),
+  adult_confirmed INTEGER NOT NULL DEFAULT 0 CHECK (adult_confirmed IN (0, 1)),
   premium_until INTEGER,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP

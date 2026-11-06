@@ -6,6 +6,7 @@ import { buildPinterestUrl, downloadPinterestVideo, extractPinterestMedia } from
 import { buildIqcUrl, downloadIqcImage, extractIqcImage } from "./iqc.js";
 import { buildImageUpscaleUrl, convertVideoToHd, downloadUpscaledImage, extractUpscaledImageUrl } from "./hd.js";
 import { formatIncomingMessage } from "./message-log.js";
+import { fetchHentaiImage } from "./hentai.js";
 import { buildSoundCloudSearchUrl, extractSoundCloudTracks, formatSoundCloudTrack } from "./soundcloud.js";
 import { extractKappaLink, KAPPA_UPLOAD_URL, MAX_TELEGRAM_FILE_SIZE, safeFileName } from "./tourl.js";
 function getSender(ctx) {
@@ -79,6 +80,7 @@ function menuCaption(page, name, subscribed, status) {
             "/hd — balas foto/video untuk meningkatkan resolusi (premium)",
             "/daftar — registrasi akun",
             "/premium — cek status premium",
+            "/h — gambar acak (18+, konfirmasi)",
             "/soundcloud du ka — cari lagu di SoundCloud",
             "/tourl — reply media untuk membuat tautan"
         ].join("\n");
@@ -174,6 +176,7 @@ export function createBot(config, store, menuMedia) {
                     { command: "hd", description: "Tingkatkan resolusi foto/video" },
                     { command: "daftar", description: "Daftarkan akun bot" },
                     { command: "premium", description: "Cek status premium" },
+                    { command: "h", description: "Gambar acak (18+)" },
                     { command: "addprem", description: "Owner: beri premium" },
                     { command: "delprem", description: "Owner: cabut premium" },
                     { command: "tourl", description: "Ubah media reply menjadi tautan" },
@@ -449,6 +452,57 @@ export function createBot(config, store, menuMedia) {
     }
     bot.command("iqc", createIqc);
     bot.command("quoted", createIqc);
+    bot.command("h", async (ctx) => {
+        if (ctx.chat?.type !== "private") {
+            await ctx.reply("Perintah /h hanya tersedia di chat pribadi dan untuk pengguna dewasa.");
+            return;
+        }
+        if (!config.hentaiApiKey) {
+            await ctx.reply("API hentai belum dikonfigurasi. Admin perlu mengisi HENTAI_API_KEY di .env.");
+            return;
+        }
+        if (store.hasConfirmedAdultContent(getSender(ctx).id)) {
+            await sendHentaiImage(ctx);
+            return;
+        }
+        const keyboard = new InlineKeyboard()
+            .text("🔞 Konfirmasi 18+ (sekali saja)", "hentai:confirm")
+            .text("Batal", "hentai:cancel");
+        await ctx.reply("Konten khusus dewasa (18+). Dengan melanjutkan, kamu mengonfirmasi bahwa kamu berusia minimal 18 tahun.", {
+            reply_markup: keyboard
+        });
+    });
+    bot.callbackQuery(/^hentai:(confirm|cancel)$/, async (ctx) => {
+        await ctx.answerCallbackQuery();
+        await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
+        if (ctx.match[1] === "cancel") {
+            await ctx.reply("Permintaan dibatalkan.");
+            return;
+        }
+        if (ctx.chat?.type !== "private") {
+            await ctx.reply("Konten dewasa hanya dapat diminta di chat pribadi.");
+            return;
+        }
+        if (!store.hasConfirmedAdultContent(getSender(ctx).id) &&
+            !store.confirmAdultContent(getSender(ctx).id)) {
+            await ctx.reply("Tidak dapat menyimpan konfirmasi. Kirim /daftar terlebih dahulu.");
+            return;
+        }
+        await sendHentaiImage(ctx);
+    });
+    async function sendHentaiImage(ctx) {
+        try {
+            await ctx.replyWithChatAction("upload_photo");
+            const image = await fetchHentaiImage(config.hentaiApiUrl, config.hentaiApiKey);
+            await ctx.replyWithPhoto(new InputFile(image.bytes, `hentai.${image.extension}`), {
+                caption: "🔞 Konten 18+ — hanya untuk orang dewasa."
+            });
+        }
+        catch (error) {
+            console.error("Hentai image request failed:", error instanceof Error ? error.name : "Unknown error");
+            await ctx.reply("Tidak dapat mengambil gambar sekarang. Coba lagi nanti.");
+        }
+    }
     bot.command("hd", async (ctx) => {
         if (!store.isPremium(getSender(ctx).id)) {
             await ctx.reply("Fitur /hd khusus pengguna premium. Hubungi owner bot untuk mengaktifkan premium.");

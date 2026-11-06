@@ -9,6 +9,7 @@ Bot Telegram multi-user dengan autentikasi identitas Telegram, tools praktis, ko
 - Pencarian gambar Pinterest lewat `/pin`; pencarian video lewat `/pinvid`, maksimal 10 hasil per pencarian.
 - Gambar iPhone quoted lewat `/iqc teks` atau alias `/quoted`; format waktu dapat diatur dengan `/iqc teks | 12:40 | 10:15`.
 - Tingkatkan foto/video melalui `/hd` khusus akun premium; balas media dengan perintah tersebut.
+- `/h` mengambil satu gambar 18+ dari API hentai; konfirmasi usia hanya diminta sekali dan disimpan pada akun lokal.
 - Pencarian lagu SoundCloud lewat `/soundcloud <kata kunci>`, menampilkan hingga 5 hasil dan tautan resmi.
 - Balasan AI otomatis memakai NeoXR GPT-Pro untuk pesan teks di chat pribadi.
 - `/tourl` untuk mengunggah media yang di-reply ke Kappa dan menerima tautannya (maksimum 20 MB).
@@ -51,7 +52,7 @@ Pengguna dan status dari database PostgreSQL lama tidak diimpor otomatis; SQLite
 
 ## Perintah
 
-Pengguna: `/start`, `/daftar`, `/help`, `/profile`, `/premium`, `/id`, `/ping`, `/time`, `/calc`, `/random`, `/pin`, `/pinvid`, `/iqc`, `/quoted`, `/hd` (premium), `/soundcloud`, `/tourl`, `/quote`, `/subscribe`, `/unsubscribe`.
+Pengguna: `/start`, `/daftar`, `/help`, `/profile`, `/premium`, `/id`, `/ping`, `/time`, `/calc`, `/random`, `/pin`, `/pinvid`, `/iqc`, `/quoted`, `/h` (18+), `/hd` (premium), `/soundcloud`, `/tourl`, `/quote`, `/subscribe`, `/unsubscribe`.
 
 Pemrosesan `/hd` untuk foto mengunggah foto ke Kappa agar NeoXR dapat mengaksesnya; video diproses lokal dengan FFmpeg. Batas ukuran media masukan 20 MB dan hasil video 45 MB. Video di-upscale secara spasial, sehingga resolusi naik tetapi detail yang tidak ada pada sumber tidak dapat dipulihkan.
 

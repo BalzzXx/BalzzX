@@ -18,6 +18,7 @@ try {
             { command: "help", description: "Buka bantuan bot" },
             { command: "daftar", description: "Daftarkan akun bot" },
             { command: "premium", description: "Cek status premium" },
+            { command: "h", description: "Gambar acak (18+)" },
             { command: "addprem", description: "Owner: beri premium" },
             { command: "delprem", description: "Owner: cabut premium" },
             { command: "pin", description: "Cari gambar Pinterest" },

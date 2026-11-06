@@ -15,6 +15,8 @@ export function initializeDatabase(database) {
     const columns = new Set(database.prepare("PRAGMA table_info(telegram_users)").all().map(({ name }) => name));
     if (!columns.has("is_registered"))
         database.exec("ALTER TABLE telegram_users ADD COLUMN is_registered INTEGER NOT NULL DEFAULT 0 CHECK (is_registered IN (0, 1))");
+    if (!columns.has("adult_confirmed"))
+        database.exec("ALTER TABLE telegram_users ADD COLUMN adult_confirmed INTEGER NOT NULL DEFAULT 0 CHECK (adult_confirmed IN (0, 1))");
     if (!columns.has("premium_until"))
         database.exec("ALTER TABLE telegram_users ADD COLUMN premium_until INTEGER");
 
@@ -44,6 +46,12 @@ export function initializeDatabase(database) {
     const getRegistrationStatement = database.prepare(
         "SELECT is_registered FROM telegram_users WHERE telegram_id = ?"
     );
+    const getAdultConfirmationStatement = database.prepare(
+        "SELECT adult_confirmed FROM telegram_users WHERE telegram_id = ?"
+    );
+    const confirmAdultStatement = database.prepare(
+        "UPDATE telegram_users SET adult_confirmed = 1 WHERE telegram_id = ? AND is_registered = 1"
+    );
     const getPremiumStatement = database.prepare(
         "SELECT premium_until FROM telegram_users WHERE telegram_id = ?"
     );
@@ -69,6 +77,12 @@ export function initializeDatabase(database) {
         },
         isRegistered(telegramId) {
             return getRegistrationStatement.get(String(telegramId))?.is_registered === 1;
+        },
+        hasConfirmedAdultContent(telegramId) {
+            return getAdultConfirmationStatement.get(String(telegramId))?.adult_confirmed === 1;
+        },
+        confirmAdultContent(telegramId) {
+            return confirmAdultStatement.run(String(telegramId)).changes > 0;
         },
         getPremiumUntil,
         isPremium(telegramId, now = Date.now()) {

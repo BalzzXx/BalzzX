@@ -16,6 +16,9 @@ test("SQLite user data and subscription state persist across restarts", (context
     assert.equal(firstStore.isRegistered(user.id), false);
     assert.equal(firstStore.registerUser(user.id), true);
     assert.equal(firstStore.isRegistered(user.id), true);
+    assert.equal(firstStore.hasConfirmedAdultContent(user.id), false);
+    assert.equal(firstStore.confirmAdultContent(user.id), true);
+    assert.equal(firstStore.hasConfirmedAdultContent(user.id), true);
     assert.equal(firstStore.isSubscribed(user.id), false);
     assert.equal(firstStore.setSubscribed(user.id, true), true);
     assert.equal(firstStore.setBanned(user.id, true), true);
@@ -24,6 +27,7 @@ test("SQLite user data and subscription state persist across restarts", (context
 
     const reopenedStore = initializeDatabase(createDatabase(databasePath));
     assert.equal(reopenedStore.saveUser({ ...user, first_name: "Updated" }), true);
+    assert.equal(reopenedStore.hasConfirmedAdultContent(user.id), true);
     assert.equal(reopenedStore.isSubscribed(user.id), true);
     assert.equal(reopenedStore.countSubscribers(), 0);
     assert.deepEqual(reopenedStore.listSubscribers(), []);
@@ -75,6 +79,7 @@ test("existing SQLite schemas are migrated without registering old users", (cont
     `);
     const store = initializeDatabase(database);
     assert.equal(store.isRegistered("789"), false);
+    assert.equal(store.hasConfirmedAdultContent("789"), false);
     assert.equal(store.getPremiumUntil("789"), undefined);
     assert.equal(store.registerUser("789"), true);
     assert.equal(store.isRegistered("789"), true);
