@@ -86,6 +86,54 @@ test("existing SQLite schemas are migrated without registering old users", (cont
     store.close();
 });
 
+test("daily feature quotas reserve concurrently, count only success, and reset at Jakarta midnight", (context) => {
+    const directory = mkdtempSync(join(tmpdir(), "balzzx-db-daily-"));
+    context.after(() => rmSync(directory, { recursive: true, force: true }));
+    const store = initializeDatabase(createDatabase(join(directory, "bot.sqlite")));
+    const telegramId = "321";
+    const justBeforeJakartaMidnight = Date.UTC(2026, 10, 6, 16, 59, 59);
+
+    const failedAttempt = store.reserveDailyCommand(telegramId, 1, justBeforeJakartaMidnight);
+    assert.equal(failedAttempt.allowed, true);
+    assert.equal(
+        store.reserveDailyCommand(telegramId, 1, justBeforeJakartaMidnight).allowed,
+        false
+    );
+    assert.equal(store.completeDailyCommand(failedAttempt, false), true);
+    assert.deepEqual(store.getDailyCommandUsage(telegramId, justBeforeJakartaMidnight), {
+        used: 0,
+        reserved: 0,
+        usageDate: "2026-11-06",
+        resetAt: Date.parse("2026-11-07T00:00:00+07:00")
+    });
+
+    const successfulAttempt = store.reserveDailyCommand(telegramId, 1, justBeforeJakartaMidnight);
+    assert.equal(store.completeDailyCommand(successfulAttempt, true), true);
+    assert.equal(store.reserveDailyCommand(telegramId, 1, justBeforeJakartaMidnight).allowed, false);
+
+    const afterJakartaMidnight = Date.UTC(2026, 10, 6, 17, 0, 0);
+    const nextDayAttempt = store.reserveDailyCommand(telegramId, 1, afterJakartaMidnight);
+    assert.equal(nextDayAttempt.allowed, true);
+    assert.equal(store.getDailyCommandUsage(telegramId, afterJakartaMidnight).usageDate, "2026-11-07");
+    store.completeDailyCommand(nextDayAttempt, false);
+    store.close();
+});
+
+test("daily feature reservations abandoned by a process restart are released", (context) => {
+    const directory = mkdtempSync(join(tmpdir(), "balzzx-db-daily-restart-"));
+    context.after(() => rmSync(directory, { recursive: true, force: true }));
+    const databasePath = join(directory, "bot.sqlite");
+    const firstStore = initializeDatabase(createDatabase(databasePath));
+    const reservation = firstStore.reserveDailyCommand("654", 2);
+    assert.equal(reservation.allowed, true);
+    firstStore.close();
+
+    const reopenedStore = initializeDatabase(createDatabase(databasePath));
+    assert.deepEqual(reopenedStore.getDailyCommandUsage("654").reserved, 0);
+    assert.equal(reopenedStore.reserveDailyCommand("654", 2).allowed, true);
+    reopenedStore.close();
+});
+
 test("SQLite stats return zeroes for an empty database", (context) => {
     const directory = mkdtempSync(join(tmpdir(), "balzzx-db-empty-"));
     context.after(() => rmSync(directory, { recursive: true, force: true }));

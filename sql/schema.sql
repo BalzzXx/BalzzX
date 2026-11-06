@@ -14,3 +14,11 @@ CREATE TABLE IF NOT EXISTS telegram_users (
 
 CREATE INDEX IF NOT EXISTS telegram_users_broadcast_idx
   ON telegram_users (subscribed, banned);
+
+CREATE TABLE IF NOT EXISTS daily_command_usage (
+  telegram_id TEXT NOT NULL,
+  usage_date TEXT NOT NULL,
+  used INTEGER NOT NULL DEFAULT 0 CHECK (used >= 0),
+  reserved INTEGER NOT NULL DEFAULT 0 CHECK (reserved >= 0),
+  PRIMARY KEY (telegram_id, usage_date)
+);

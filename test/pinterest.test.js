@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
     buildPinterestUrl,
+    downloadPinterestImage,
     downloadPinterestVideo,
     extractPinterestImages,
     extractPinterestMedia,
@@ -54,12 +55,80 @@ test("Pinterest video parser extracts unique secure video URLs", () => {
     assert.equal(videos[1]?.url, "https://cdn.example.com/cat.webm");
 });
 
+test("Pinterest v2 parser extracts content URLs and skips author avatars and other media types", () => {
+    const payload = {
+        status: true,
+        data: [
+            {
+                title: "Video pin",
+                is_video: true,
+                author: { image_large_url: "https://i.pinimg.com/avatar.jpg" },
+                content: [{ url: "https://v1.pinimg.com/video.mp4" }]
+            },
+            {
+                title: "Image pin",
+                is_video: false,
+                author: { image_large_url: "https://i.pinimg.com/other-avatar.jpg" },
+                content: [{ width: 800, height: 600, url: "https://i.pinimg.com/image.png" }]
+            }
+        ]
+    };
+    const images = extractPinterestMedia(payload, "image", 10);
+    const videos = extractPinterestMedia(payload, "video", 10);
+    assert.deepEqual(images, [{ url: "https://i.pinimg.com/image.png", title: "Image pin" }]);
+    assert.deepEqual(videos, [{ url: "https://v1.pinimg.com/video.mp4", title: "Video pin" }]);
+});
+
+test("Pinterest v2 parser does not fall back to profile images when media type is absent", () => {
+    const payload = {
+        data: [{
+            is_video: false,
+            author: { image_large_url: "https://i.pinimg.com/avatar.jpg" },
+            content: [{ url: "https://i.pinimg.com/image.jpg" }]
+        }]
+    };
+    assert.deepEqual(extractPinterestMedia(payload, "video", 10), []);
+});
+
+test("Pinterest image downloader reads image bytes from the Pinterest CDN", async () => {
+    const image = await downloadPinterestImage("https://i.pinimg.com/images/cat.png", async (url, options) => {
+        assert.equal(url.hostname, "i.pinimg.com");
+        assert.equal(options.redirect, "manual");
+        return new Response(new Uint8Array([1, 2, 3]), {
+            headers: { "content-type": "image/png", "content-length": "3" }
+        });
+    });
+    assert.equal(image.extension, "png");
+    assert.deepEqual([...image.bytes], [1, 2, 3]);
+});
+
+test("Pinterest image downloader rejects untrusted hosts, HTML, and oversized images", async () => {
+    await assert.rejects(
+        downloadPinterestImage("https://example.com/image.jpg", async () => {
+            throw new Error("fetch should not be called");
+        }),
+        /HTTPS pinimg\.com host/
+    );
+    await assert.rejects(
+        downloadPinterestImage("https://i.pinimg.com/image.jpg", async () =>
+            new Response("html", { headers: { "content-type": "text/html" } })),
+        /Unsupported Pinterest image type/
+    );
+    await assert.rejects(
+        downloadPinterestImage("https://i.pinimg.com/image.jpg", async () =>
+            new Response(null, {
+                headers: { "content-type": "image/jpeg", "content-length": String(10 * 1024 * 1024 + 1) }
+            })),
+        /10 MB size limit/
+    );
+});
+
 test("Pinterest video downloader reads bytes from a Pinterest CDN URL", async () => {
     const bytes = await downloadPinterestVideo("https://v1.pinimg.com/videos/cat.mp4", async (url, options) => {
         assert.equal(url.hostname, "v1.pinimg.com");
         assert.equal(options.redirect, "manual");
         return new Response(new Uint8Array([1, 2, 3]), {
-            headers: { "content-length": "3" }
+            headers: { "content-type": "video/mp4", "content-length": "3" }
         });
     });
     assert.deepEqual([...bytes], [1, 2, 3]);
@@ -74,7 +143,7 @@ test("Pinterest video downloader rejects non-Pinterest URLs and oversized respon
     );
     await assert.rejects(
         downloadPinterestVideo("https://v1.pinimg.com/videos/cat.mp4", async () =>
-            new Response(null, { headers: { "content-length": String(MAX_PINTEREST_VIDEO_SIZE + 1) } })),
-        /upload size limit/
+            new Response(null, { headers: { "content-type": "video/mp4", "content-length": String(MAX_PINTEREST_VIDEO_SIZE + 1) } })),
+        /50 MB size limit/
     );
 });

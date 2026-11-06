@@ -2,13 +2,15 @@ import { Bot, GrammyError, InlineKeyboard, InputFile } from "grammy";
 import { resolve } from "node:path";
 import { calculate, formatJakartaTime, formatRuntime, randomInteger } from "./features.js";
 import { buildNeoXrUrl, extractNeoXrAnswer } from "./neoxr.js";
-import { buildPinterestUrl, downloadPinterestVideo, extractPinterestMedia } from "./pinterest.js";
+import { buildPinterestUrl, downloadPinterestImage, downloadPinterestVideo, extractPinterestMedia } from "./pinterest.js";
 import { buildIqcUrl, downloadIqcImage, extractIqcImage } from "./iqc.js";
 import { buildImageUpscaleUrl, convertVideoToHd, downloadUpscaledImage, extractUpscaledImageUrl } from "./hd.js";
 import { formatIncomingMessage } from "./message-log.js";
 import { fetchHentaiImage } from "./hentai.js";
 import { buildSoundCloudSearchUrl, extractSoundCloudTracks, formatSoundCloudTrack } from "./soundcloud.js";
 import { extractKappaLink, KAPPA_UPLOAD_URL, MAX_TELEGRAM_FILE_SIZE, safeFileName } from "./tourl.js";
+const MEMBER_DAILY_COMMAND_LIMIT = 100;
+const PREMIUM_DAILY_COMMAND_LIMIT = 1000;
 function getSender(ctx) {
     if (!ctx.from)
         throw new Error("Telegram update is missing its sender");
@@ -80,6 +82,7 @@ function menuCaption(page, name, subscribed, status) {
             "/hd — balas foto/video untuk meningkatkan resolusi (premium)",
             "/daftar — registrasi akun",
             "/premium — cek status premium",
+            "/limit — cek kuota harian",
             "/h — gambar acak (18+, konfirmasi)",
             "/soundcloud du ka — cari lagu di SoundCloud",
             "/tourl — reply media untuk membuat tautan"
@@ -101,6 +104,39 @@ export function createBot(config, store, menuMedia) {
     const configuredCommandChats = new Set();
     const aiInFlight = new Set();
     const registrationCommands = new Set(["start", "daftar", "profile"]);
+    const quotaCommands = new Set(["pin", "pinvid", "iqc", "quoted", "h", "hd", "soundcloud", "tourl"]);
+    const quotaReservations = new WeakMap();
+    const isOwner = (id) => config.ownerIds.has(String(id));
+    function markDailyCommandSuccess(ctx) {
+        quotaReservations.get(ctx)?.();
+    }
+    async function runWithDailyCommandLimit(ctx, next) {
+        const userId = getSender(ctx).id;
+        if (isOwner(userId))
+            return next();
+        const limit = store.isPremium(userId) ? PREMIUM_DAILY_COMMAND_LIMIT : MEMBER_DAILY_COMMAND_LIMIT;
+        const reservation = store.reserveDailyCommand(userId, limit);
+        if (!reservation.allowed) {
+            const resetAt = new Intl.DateTimeFormat("id-ID", {
+                timeZone: "Asia/Jakarta",
+                hour: "2-digit",
+                minute: "2-digit"
+            }).format(new Date(reservation.resetAt));
+            await ctx.reply(`Kuota harian habis (${reservation.used}/${reservation.limit}). Reset pukul ${resetAt} WIB.`);
+            return;
+        }
+        let succeeded = false;
+        quotaReservations.set(ctx, () => {
+            succeeded = true;
+        });
+        try {
+            return await next();
+        }
+        finally {
+            quotaReservations.delete(ctx);
+            store.completeDailyCommand(reservation, succeeded);
+        }
+    }
     async function getBotStatus() {
         const before = Date.now();
         try {
@@ -176,6 +212,7 @@ export function createBot(config, store, menuMedia) {
                     { command: "hd", description: "Tingkatkan resolusi foto/video" },
                     { command: "daftar", description: "Daftarkan akun bot" },
                     { command: "premium", description: "Cek status premium" },
+                    { command: "limit", description: "Cek kuota harian" },
                     { command: "h", description: "Gambar acak (18+)" },
                     { command: "addprem", description: "Owner: beri premium" },
                     { command: "delprem", description: "Owner: cabut premium" },
@@ -201,6 +238,8 @@ export function createBot(config, store, menuMedia) {
                 console.error("Could not update Telegram chat commands:", error);
             }
         }
+        if (quotaCommands.has(commandName ?? ""))
+            return runWithDailyCommandLimit(ctx, next);
         return next();
     });
     bot.command("start", async (ctx) => {
@@ -372,34 +411,20 @@ export function createBot(config, store, menuMedia) {
             const caption = (item, index) => index === 0
                 ? `📌 Hasil ${type === "image" ? "gambar" : "video"} Pinterest: ${query}${item.title ? `\n${item.title}` : ""}`
                 : undefined;
-            if (media.length === 1) {
-                const item = media[0];
+            for (const [index, item] of media.entries()) {
                 if (type === "image") {
-                    await ctx.api.sendPhoto(chatId, item.url, {
-                        caption: caption(item, 0)
+                    const image = await downloadPinterestImage(item.url);
+                    await ctx.api.sendPhoto(chatId, new InputFile(image.bytes, `pinterest.${image.extension}`), {
+                        ...(caption(item, index) ? { caption: caption(item, index) } : {})
                     });
                 }
                 else {
-                    await ctx.api.sendVideo(chatId, item.url, {
-                        caption: caption(item, 0)
-                    });
-                }
-                return;
-            }
-            if (type === "image") {
-                await ctx.api.sendMediaGroup(chatId, media.map((item, index) => ({
-                    type: "photo",
-                    media: item.url,
-                    ...(caption(item, index) ? { caption: caption(item, index) } : {})
-                })));
-            }
-            else {
-                for (const [index, item] of media.entries()) {
                     const video = await downloadPinterestVideo(item.url);
                     await ctx.api.sendVideo(chatId, new InputFile(video, "pinterest-video.mp4"), {
                         ...(caption(item, index) ? { caption: caption(item, index) } : {})
                     });
                 }
+                markDailyCommandSuccess(ctx);
             }
         }
         catch (error) {
@@ -444,6 +469,7 @@ export function createBot(config, store, menuMedia) {
             }
             const image = await downloadIqcImage(imageSource.url, imageSource.mime);
             await ctx.replyWithPhoto(new InputFile(image.bytes, `iqc.${image.extension}`));
+            markDailyCommandSuccess(ctx);
         }
         catch (error) {
             console.error("NeoXR IQC generation failed:", error);
@@ -462,7 +488,7 @@ export function createBot(config, store, menuMedia) {
             return;
         }
         if (store.hasConfirmedAdultContent(getSender(ctx).id)) {
-            await sendHentaiImage(ctx);
+            await runWithDailyCommandLimit(ctx, () => sendHentaiImage(ctx));
             return;
         }
         const keyboard = new InlineKeyboard()
@@ -488,7 +514,7 @@ export function createBot(config, store, menuMedia) {
             await ctx.reply("Tidak dapat menyimpan konfirmasi. Kirim /daftar terlebih dahulu.");
             return;
         }
-        await sendHentaiImage(ctx);
+        await runWithDailyCommandLimit(ctx, () => sendHentaiImage(ctx));
     });
     async function sendHentaiImage(ctx) {
         try {
@@ -497,6 +523,7 @@ export function createBot(config, store, menuMedia) {
             await ctx.replyWithPhoto(new InputFile(image.bytes, `hentai.${image.extension}`), {
                 caption: "🔞 Konten 18+ — hanya untuk orang dewasa."
             });
+            markDailyCommandSuccess(ctx);
         }
         catch (error) {
             console.error("Hentai image request failed:", error instanceof Error ? error.name : "Unknown error");
@@ -576,6 +603,7 @@ export function createBot(config, store, menuMedia) {
                 await ctx.replyWithDocument(new InputFile(image.bytes, `foto-hd.${image.extension}`), {
                     caption: "✅ Foto ditingkatkan oleh NeoXR."
                 });
+                markDailyCommandSuccess(ctx);
                 return;
             }
 
@@ -584,6 +612,7 @@ export function createBot(config, store, menuMedia) {
                 caption: "✅ Video di-upscale lokal ke HD 1080.",
                 supports_streaming: true
             });
+            markDailyCommandSuccess(ctx);
         }
         catch (error) {
             console.error("HD media processing failed:", error instanceof Error ? error.name : "Unknown error");
@@ -616,6 +645,7 @@ export function createBot(config, store, menuMedia) {
                 return;
             }
             await ctx.reply(`🔎 Hasil SoundCloud untuk “${query}”\n\n${tracks.map(formatSoundCloudTrack).join("\n\n")}`);
+            markDailyCommandSuccess(ctx);
         }
         catch (error) {
             console.error("SoundCloud search failed:", error instanceof Error ? error.name : "Unknown error");
@@ -722,6 +752,7 @@ export function createBot(config, store, menuMedia) {
                 return;
             }
             await ctx.reply(`✅ File berhasil diunggah:\n${link}\n\nFile disimpan di layanan pihak ketiga Kappa.`);
+            markDailyCommandSuccess(ctx);
         }
         catch (error) {
             console.error("Kappa upload failed:", error);
@@ -752,8 +783,23 @@ export function createBot(config, store, menuMedia) {
         }
         await ctx.reply(`⭐ Status premium: aktif\nBerlaku sampai: ${new Date(expiresAt).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })} WIB`);
     });
+    bot.command("limit", async (ctx) => {
+        const userId = getSender(ctx).id;
+        if (isOwner(userId)) {
+            await ctx.reply("♾ Kuota harian: unlimited (Owner).");
+            return;
+        }
+        const limit = store.isPremium(userId) ? PREMIUM_DAILY_COMMAND_LIMIT : MEMBER_DAILY_COMMAND_LIMIT;
+        const usage = store.getDailyCommandUsage(userId);
+        const resetAt = new Intl.DateTimeFormat("id-ID", {
+            timeZone: "Asia/Jakarta",
+            hour: "2-digit",
+            minute: "2-digit"
+        }).format(new Date(usage.resetAt));
+        const used = usage.used + usage.reserved;
+        await ctx.reply(`📊 Kuota fitur harian: ${used}/${limit}\nSisa: ${Math.max(0, limit - used)}\nReset pukul ${resetAt} WIB.`);
+    });
     const isAdmin = (id) => config.adminIds.has(String(id));
-    const isOwner = (id) => config.ownerIds.has(String(id));
     bot.command("addprem", async (ctx) => {
         if (!isOwner(getSender(ctx).id))
             return ctx.reply("Perintah khusus owner.");

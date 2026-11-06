@@ -17,6 +17,7 @@ Bot Telegram multi-user dengan autentikasi identitas Telegram, tools praktis, ko
 - `/subscribe` dan `/unsubscribe` untuk persetujuan menerima atau berhenti dari broadcast.
 - Perintah admin `/stats`, `/users`, `/broadcast`, `/ban`, dan `/unban`.
 - Owner yang dikonfigurasi lewat `BOT_OWNER_IDS` dapat memberi premium dengan `/addprem <telegram_id> <hari>` dan mencabutnya dengan `/delprem <telegram_id>`. Pengguna dapat memeriksa masa aktif lewat `/premium`.
+- Kuota harian fitur eksternal: Member 100, Premium 1000, Owner unlimited; reset tengah malam WIB. Hanya hasil yang berhasil dikirim dihitung; pesan AI otomatis tidak mengurangi kuota. Periksa pemakaian dengan `/limit`.
 - Broadcast perlu konfirmasi admin dan dikirim hanya ke subscriber aktif; penerima yang memblokir bot otomatis dikeluarkan.
 - Data pengguna, status langganan, dan blokir tersimpan di file SQLite lokal.
 - Pesan masuk dicatat secara realtime di console; teks dan caption pesan akan tampil di log.
@@ -52,7 +53,7 @@ Pengguna dan status dari database PostgreSQL lama tidak diimpor otomatis; SQLite
 
 ## Perintah
 
-Pengguna: `/start`, `/daftar`, `/help`, `/profile`, `/premium`, `/id`, `/ping`, `/time`, `/calc`, `/random`, `/pin`, `/pinvid`, `/iqc`, `/quoted`, `/h` (18+), `/hd` (premium), `/soundcloud`, `/tourl`, `/quote`, `/subscribe`, `/unsubscribe`.
+Pengguna: `/start`, `/daftar`, `/help`, `/profile`, `/premium`, `/limit`, `/id`, `/ping`, `/time`, `/calc`, `/random`, `/pin`, `/pinvid`, `/iqc`, `/quoted`, `/h` (18+), `/hd` (premium), `/soundcloud`, `/tourl`, `/quote`, `/subscribe`, `/unsubscribe`.
 
 Pemrosesan `/hd` untuk foto mengunggah foto ke Kappa agar NeoXR dapat mengaksesnya; video diproses lokal dengan FFmpeg. Batas ukuran media masukan 20 MB dan hasil video 45 MB. Video di-upscale secara spasial, sehingga resolusi naik tetapi detail yang tidak ada pada sumber tidak dapat dipulihkan.
 

@@ -2,6 +2,28 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+function getJakartaDateKey(now) {
+    const parts = new Intl.DateTimeFormat("en", {
+        timeZone: "Asia/Jakarta",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+    }).formatToParts(new Date(now));
+    const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+    return `${values.year}-${values.month}-${values.day}`;
+}
+
+function getNextJakartaMidnight(now) {
+    const [year, month, day] = getJakartaDateKey(now).split("-").map(Number);
+    const nextDay = new Date(Date.UTC(year, month - 1, day + 1));
+    const date = [
+        nextDay.getUTCFullYear(),
+        String(nextDay.getUTCMonth() + 1).padStart(2, "0"),
+        String(nextDay.getUTCDate()).padStart(2, "0")
+    ].join("-");
+    return Date.parse(`${date}T00:00:00+07:00`);
+}
+
 export function createDatabase(databasePath) {
     const filePath = resolve(process.cwd(), databasePath);
     mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
@@ -19,6 +41,7 @@ export function initializeDatabase(database) {
         database.exec("ALTER TABLE telegram_users ADD COLUMN adult_confirmed INTEGER NOT NULL DEFAULT 0 CHECK (adult_confirmed IN (0, 1))");
     if (!columns.has("premium_until"))
         database.exec("ALTER TABLE telegram_users ADD COLUMN premium_until INTEGER");
+    database.exec("UPDATE daily_command_usage SET reserved = 0");
 
     const saveUserStatement = database.prepare(`
         INSERT INTO telegram_users (telegram_id, username, first_name, last_name)
@@ -61,6 +84,23 @@ export function initializeDatabase(database) {
     const removePremiumStatement = database.prepare(
         "UPDATE telegram_users SET premium_until = NULL WHERE telegram_id = ?"
     );
+    const insertDailyUsageStatement = database.prepare(`
+        INSERT OR IGNORE INTO daily_command_usage (telegram_id, usage_date)
+        VALUES (?, ?)
+    `);
+    const getDailyUsageStatement = database.prepare(`
+        SELECT used, reserved FROM daily_command_usage
+        WHERE telegram_id = ? AND usage_date = ?
+    `);
+    const reserveDailyUsageStatement = database.prepare(`
+        UPDATE daily_command_usage SET reserved = reserved + 1
+        WHERE telegram_id = ? AND usage_date = ?
+    `);
+    const completeDailyUsageStatement = database.prepare(`
+        UPDATE daily_command_usage
+        SET reserved = MAX(reserved - 1, 0), used = used + ?
+        WHERE telegram_id = ? AND usage_date = ?
+    `);
     function getPremiumUntil(telegramId) {
         const premiumUntil = getPremiumStatement.get(String(telegramId))?.premium_until;
         return typeof premiumUntil === "number" ? premiumUntil : undefined;
@@ -99,6 +139,53 @@ export function initializeDatabase(database) {
         },
         removePremium(telegramId) {
             return removePremiumStatement.run(String(telegramId)).changes > 0;
+        },
+        getDailyCommandUsage(telegramId, now = Date.now()) {
+            const usageDate = getJakartaDateKey(now);
+            insertDailyUsageStatement.run(String(telegramId), usageDate);
+            const usage = getDailyUsageStatement.get(String(telegramId), usageDate);
+            return {
+                used: usage.used,
+                reserved: usage.reserved,
+                usageDate,
+                resetAt: getNextJakartaMidnight(now)
+            };
+        },
+        reserveDailyCommand(telegramId, limit, now = Date.now()) {
+            if (!Number.isSafeInteger(limit) || limit < 1)
+                throw new RangeError("Daily command limit must be a positive safe integer");
+            const id = String(telegramId);
+            const usageDate = getJakartaDateKey(now);
+            database.exec("BEGIN IMMEDIATE");
+            try {
+                insertDailyUsageStatement.run(id, usageDate);
+                const usage = getDailyUsageStatement.get(id, usageDate);
+                if (usage.used + usage.reserved >= limit) {
+                    database.exec("COMMIT");
+                    return {
+                        allowed: false,
+                        used: usage.used,
+                        limit,
+                        resetAt: getNextJakartaMidnight(now)
+                    };
+                }
+                reserveDailyUsageStatement.run(id, usageDate);
+                database.exec("COMMIT");
+                return { allowed: true, telegramId: id, usageDate, limit };
+            }
+            catch (error) {
+                database.exec("ROLLBACK");
+                throw error;
+            }
+        },
+        completeDailyCommand(reservation, succeeded) {
+            if (!reservation?.allowed)
+                return false;
+            return completeDailyUsageStatement.run(
+                succeeded ? 1 : 0,
+                reservation.telegramId,
+                reservation.usageDate
+            ).changes > 0;
         },
         isSubscribed(telegramId) {
             return getUserStatement.get(String(telegramId))?.subscribed === 1;
